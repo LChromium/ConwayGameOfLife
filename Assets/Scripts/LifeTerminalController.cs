@@ -11,27 +11,26 @@ namespace ConwayGameOfLife
         private const int GridHeight = 64;
 
         /// <summary>
-        /// Panel width that triggers the stacked layout, in panel units.
+        /// Panel width below which the workspace stacks, in panel units.
         ///
-        /// 1500 sits between the two measured cases: a 16:9 window exposes the full 1600, while a
-        /// 1440x900 (16:10) window exposes 1518. Taking 1600 here would have pushed 16:10 windows
-        /// into the stacked layout even though they have room for two columns.
-        ///
-        /// The workspace also stacks when the visible height cannot host the side-by-side layout.
-        /// USS has no media queries, so the switch is driven from code by watching the root's
-        /// resolved size; see <see cref="OnRootGeometryChanged"/>.
+        /// Set below the narrowest target viewport (1280x720 exposes the full 1600 design space,
+        /// and even a 16:10 viewport exposes 1518), so ordinary targets keep the two-column layout
+        /// and only a genuinely cramped panel stacks.
         /// </summary>
-        private const float DesignWidth = 1500f;
+        private const float DesignWidth = 1100f;
 
         /// <summary>
         /// Panel height below which the workspace stacks, in panel units.
         ///
-        /// The side-by-side layout measures 949 units tall. This threshold sits a little under that
-        /// so a 16:9 window (900 units) always stacks, while a 16:10 window (949) keeps two columns.
-        /// It is deliberately not exactly 949: relying on "< 949" against a 949 measurement has no
-        /// margin at all, and rounding would decide the layout.
+        /// 830 is the stacked layout's MINIMUM content height (828), rounded up. Setting the
+        /// breakpoint lower would be self-defeating: between that lower value and 828 the layout
+        /// would stack and still not fit, which is worse than staying in two columns.
+        ///
+        /// An earlier version used 949 - a figure taken from a 900-tall panel whose free space had
+        /// already been absorbed by growing children - which forced every 16:9 viewport into the
+        /// stacked layout even though two columns fit them with room to spare.
         /// </summary>
-        private const float SideBySideContentHeight = 935f;
+        private const float SideBySideContentHeight = 830f;
 
         private LifeSimulation simulation;
         private LifeGridElement grid;

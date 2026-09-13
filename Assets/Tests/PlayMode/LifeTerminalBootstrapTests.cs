@@ -365,10 +365,10 @@ namespace ConwayGameOfLife.Tests
             VisualElement panelTree = root.panel.visualTree;
 
             // Two spaces are in play and mixing them is a category error:
-            //   worldBound   -> panel space (the 1440x900 reference resolution)
+            //   worldBound   -> panel space (the design resolution, currently 1600x900)
             //   Screen.*     -> physical pixels, after the panel's fit transform
             // Containment is therefore checked in panel space, against the viewport that is
-            // actually visible (the full panel extent can exceed it on a short window).
+            // actually visible (on a short window the panel can extend past the viewport).
             Rect viewport = panelTree.worldBound;
             Assert.Greater(viewport.width, 0f, "the panel has no width");
             Assert.Greater(viewport.height, 0f, "the panel has no height");
@@ -401,11 +401,12 @@ namespace ConwayGameOfLife.Tests
             Assert.GreaterOrEqual(display.yMin, machineBounds.yMin - 0.5f, "the display starts above the machine");
             Assert.LessOrEqual(display.yMax, machineBounds.yMax + 0.5f, "the display overflows the machine");
 
-            // Documented contract: the layout is authored for a reference height of 900px
-            // (16:10). It is verified to fit 1280x720; the decorative footer is what gets squeezed
-            // first on shorter windows, which is recorded in PROJECT_LOG.
+            // The design space is 1600x900 and is scaled to fit the target viewport. These figures
+            // are from the PlayMode host, which runs at 640x480 - a resolution the layout was not
+            // authored for - so they only prove the fit transform behaves; the 1280x720 and
+            // 1920x1080 cases are covered by PanelScreenFit unit tests and by Player captures.
             Debug.Log($"[layout-fit] screen={Screen.width}x{Screen.height} panel={viewport.width:F0}x{viewport.height:F0} " +
-                      $"scale={k:F4} machineBottomOnScreen={machineBottomOnScreen:F0} contentHeight={machineBounds.yMax + FindByClass(root, "footer").worldBound.height:F0}");
+                      $"scale={k:F4} machineBottomOnScreen={machineBottomOnScreen:F0}");
         }
 
         [UnityTest]

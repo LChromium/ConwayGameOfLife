@@ -105,7 +105,68 @@ dotnet run --project .verify/Verify.csproj -c Release -- selftest        # 证�
 
 ---
 
-## 4. 项目结构
+## 4. 画面验收与实机测量
+
+### 网络代理（本机配置，不属于项目）
+
+本机直连 `github.com:443` 会被重置（`Recv failure: Connection was reset`），推送需要走本机代理。
+**这属于开发环境配置，故意不写入仓库**（仓库配置会随克隆分发到其他机器，而其他机器未必有同样的代理）：
+
+```powershell
+# 仅在需要时对单次命令生效，不污染仓库配置
+git -c http.proxy=http://127.0.0.1:7897 push origin main
+```
+
+若你的环境可直连 GitHub，则无需任何配置。
+
+### 复现验证所需
+
+| 项 | 版本 / 说明 |
+|---|---|
+| Unity Editor | 6000.6.0f1（含 Windows Build Support 模块，生成 Player 截图时需要）|
+| .NET SDK | 8.0+（运行 `Assets/../.verify` 独立校验工具）|
+| 可选 | 本机代理，仅在直连 GitHub 失败时用于推送 |
+
+---
+
+## 5. 项目结构
+
+`Screenshots/` 是从**真实 Windows Player 构建**中捕获的画面与测量数据，用于确认响应式布局与可读性。
+PlayMode 测试宿主固定在 640×480，无法代表目标分辨率，因此这部分必须由 Player 产出。
+
+| 文件 | 内容 |
+|---|---|
+| `player-1280x720.png` | 1280×720 实机截图（脉冲星样本）|
+| `player-1920x1080.png` | 1920×1080 实机截图（脉冲星样本）|
+| `player-measurements.jsonl` | 两个分辨率的布局测量与帧时间原始数据 |
+
+复现方式：
+
+```powershell
+unity command build --project-path . --target StandaloneWindows64 --outputPath Builds/LifeTerminal.exe --confirm
+Builds\LifeTerminal.exe -screen-width 1280 -screen-height 720 -lifeLayoutProbe
+Builds\LifeTerminal.exe -screen-width 1920 -screen-height 1080 -lifeLayoutProbe
+```
+
+测量结果存放在 `%USERPROFILE%\AppData\LocalLow\DefaultCompany\ConwayGameOfLife\layout-probe\`。
+
+**实测摘要**（两个分辨率完全一致，说明设计空间是尺度不变的）：
+
+| 指标 | 1280×720 | 1920×1080 |
+|---|---|---|
+| 可见设计空间 | 1600×900 | 1600×900 |
+| `PanelScreenFit` 预测 | 1600×900 | 1600×900 |
+| **预测 vs 实测偏差** | **0.00 / 0.00** | **0.00 / 0.00** |
+| 两栏布局（compact 关闭）| 是 | 是 |
+| 网格高度 | 546 px | 544 px |
+| 平均帧时间 / 帧率 | 6.25 ms / 160 fps | 6.24 ms / 160 fps |
+
+> 帧时间来自**真实 Player 的空转采样**（240 帧，无合成调用），包含渲染与 UI 更新；
+> 这与 `TechnicalAnalysis.md` §5.3 中标注为 SYNTHETIC 的规则引擎微基准是两回事，不可混用。
+
+---
+
+## 6. 已知边界与后续可做的事
 
 ```
 Assets/
@@ -140,7 +201,7 @@ Assets/
 
 ---
 
-## 5. 已知边界与后续可做的事
+## 7. 开发环境说明
 
 - **渲染成本尚未采样**：规则推进每代仅 0.231 ms，但 `LifeGridElement.DrawGrid` 每次重绘会为全部 6,144 个格子逐个构建路径。**在没有 Profiler 数据前不要优化规则内核**——先分别采样「规则推进 / 网格重绘 / UI 布局」三段。若将来优化绘制，必须保留死细胞的网格底纹外观。
 - **环绕边界有性能代价**：实测取模运算使**吞吐下降 39.5%**（7,600 万 → 4,600 万格/秒），换算成**每代耗时增加 65.4%**。优化方式是"幽灵边框"（ghost border）而非逐邻居取模。

@@ -321,11 +321,14 @@ namespace ConwayGameOfLife.Tests
         public void PanelFit_ScaleFactorIsConservativeAgainstUnitysOwnMeasuredScale()
         {
             // Unity's real fit transform is not documented precisely enough to reproduce exactly.
-            // At 640x480 against the previous 1440x900 reference, Unity reported a panel of
-            // ~1309x982 (effective scale 640/1309.09 = 0.48891) while the geometric interpolation
-            // yields 0.48686. Rather than assert an exact match to a number the engine owns, this
-            // asserts the property that actually matters: the predicted scale is never MORE
-            // generous than Unity's, so a "fits" verdict here cannot be optimistic.
+            // At 640x480 against a 1440x900 design resolution, Unity reported a panel of ~1309x982
+            // (effective scale 640/1309.09 = 0.48891) while the geometric interpolation yields
+            // 0.48686. Rather than assert an exact match to a number the engine owns, this asserts
+            // the property that actually matters: the predicted scale is never MORE generous than
+            // Unity's, so a "fits" verdict here cannot be optimistic.
+            //
+            // The same measurement cross-checked at 1920x1080 lives in the PlayMode suite, where the
+            // real panel is observed rather than predicted.
             float predicted = PanelScreenFit.ScaleFactor(640, 480, 1440, 900, 0.5f);
             const float unityObserved = 0.48891f;
 
@@ -336,7 +339,7 @@ namespace ConwayGameOfLife.Tests
             // Ordering sanity: a bigger screen must not yield a smaller scale.
             Assert.Greater(PanelScreenFit.ScaleFactor(1920, 1080, 1440, 900, 0.5f), predicted);
 
-            // And with the 16:9 reference the scale is exactly the linear ratio on 16:9 windows.
+            // With a 16:9 design resolution the scale is exactly the linear ratio on 16:9 viewports.
             Assert.AreEqual(1.2f, PanelScreenFit.ScaleFactor(1920, 1080, 1600, 900, 0.5f), 0.0001f);
             Assert.AreEqual(0.8f, PanelScreenFit.ScaleFactor(1280, 720, 1600, 900, 0.5f), 0.0001f);
         }
@@ -358,67 +361,98 @@ namespace ConwayGameOfLife.Tests
         private const float ReferenceMatch = 0.5f;
 
         [Test]
-        public void PanelFit_SixteenByNineWindowsExposeTheFullReferencePanel()
+        public void PanelFit_TargetResolutionsExposeTheWholeDesignSpace()
         {
-            // The reference resolution is 16:9 precisely so this holds: a 16:9 window at or above
-            // the reference exposes exactly the full panel, with nothing cropped.
+            // The design space is 1600x900. It is SCALED to fit the target viewport, so the claim
+            // here is not "the screen is 1600x900" - it is the narrower, checkable statement that a
+            // viewport at least as large as the design space and of the same aspect ratio exposes
+            // all of it, leaving nothing to crop. The identical values at 1280x720 and 1920x1080
+            // are the point: the design space is scale-invariant, not the pixel count.
             foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440) })
             {
                 (float panelWidth, float panelHeight) =
                     PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
 
-                Assert.AreEqual(ReferenceWidth, panelWidth, 1f, $"{w}x{h}: unexpected visible panel width");
-                Assert.AreEqual(ReferenceHeight, panelHeight, 1f, $"{w}x{h}: unexpected visible panel height");
+                Assert.AreEqual(ReferenceWidth, panelWidth, 1f, $"{w}x{h}: design space partially cropped horizontally");
+                Assert.AreEqual(ReferenceHeight, panelHeight, 1f, $"{w}x{h}: design space partially cropped vertically");
+
+                // And it really is a scale: the factor differs, the design space does not.
+                float scale = PanelScreenFit.ScaleFactor(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+                Assert.AreEqual((float)w / ReferenceWidth, scale, 0.0001f, $"{w}x{h}: unexpected scale factor");
             }
         }
 
         [Test]
-        public void PanelFit_SingleColumnLayoutFitsAtEveryTargetResolution()
+        public void PanelFit_CompactLayoutFitsWhenItIsUsed()
         {
-            // The side-by-side layout needs 949 of the 900... it needs more than the reference height
-            // on 16:9, which is exactly why the compact breakpoint exists. On 16:9 windows the panel
-            // is the full 1600x900, so the stacked layout (828 units) is what must fit there.
-            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440), (1440, 900) })
+            // The stacked layout only has to work in the cases it is chosen for. It is chosen when
+            // the panel is either narrower than 1100 or shorter than 830 - and 830 is exactly the
+            // stacked layout's minimum height, so any panel that triggers it can also host it.
+            foreach ((int w, int h) in new[] { (300, 400), (1024, 600), (1280, 720), (1920, 1080) })
             {
+                (float panelWidth, float panelHeight) =
+                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+
+                bool wouldStack = panelWidth < 1100f || panelHeight < 830f;
+                if (!wouldStack)
+                {
+                    continue; // not a stacked case; the two-column tests cover it
+                }
+
                 Assert.IsTrue(
                     PanelScreenFit.FitsVertically(CompactContentHeight, w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch),
-                    $"{w}x{h}: compact layout needs {CompactContentHeight}px and does not fit");
-
-                (float panelWidth, _) =
-                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
-                Assert.Greater(panelWidth, 700f, $"{w}x{h}: panel only {panelWidth:F0}px wide");
+                    $"{w}x{h}: stacks (panel {panelWidth:F0}x{panelHeight:F0}) but the compact layout does not fit");
             }
         }
 
         [Test]
-        public void PanelFit_CompactLayoutIsRequiredForSixteenByNineButNotForSixteenByTen()
+        public void PanelFit_TargetResolutionsKeepTheTwoColumnLayout()
         {
-            // The breakpoint condition the controller implements: stack the workspace when EITHER
-            // the visible panel is narrower than the reference width, OR it is too short for the
-            // side-by-side layout. Expressed as math here so the policy is verifiable without
-            // resizing a window.
+            // The two-column layout is the intended presentation; the stacked one exists only for a
+            // panel too small to host it. The check is the layout's real minimum content height, not
+            // the height it happened to render at in one capture (a taller panel simply gives its
+            // growing children more room, which is not the same as needing more room).
             static bool NeedsCompact(int w, int h)
             {
                 (float panelWidth, float panelHeight) =
                     PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
 
-                // Mirrors LifeTerminalController.ApplyCompactClass. The height threshold carries
-                // margin below the 949-unit measurement so rounding cannot decide the layout.
-                return panelWidth < 1500f
-                       || panelHeight < 935f;
+                // Mirrors LifeTerminalController.ApplyCompactClass.
+                return panelWidth < 1100f
+                       || panelHeight < 830f;
             }
 
-            // 16:9 windows: the panel is full width but only 900 tall, which cannot host 949.
-            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440) })
+            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440), (1440, 900), (1920, 1200) })
             {
-                Assert.IsTrue(NeedsCompact(w, h), $"{w}x{h} should use the stacked layout");
+                Assert.IsFalse(NeedsCompact(w, h), $"{w}x{h} is a target viewport and must keep two columns");
             }
 
-            // 16:10 windows: taller, so the side-by-side layout fits and must be kept.
-            foreach ((int w, int h) in new[] { (1440, 900), (1920, 1200) })
-            {
-                Assert.IsFalse(NeedsCompact(w, h), $"{w}x{h} should keep the side-by-side layout");
-            }
+            // A genuinely cramped panel still stacks, so the fallback is not dead code.
+            //
+            // Worth noting which cases are actually cramped: because MatchWidthOrHeight keeps the
+            // panel proportional to the window, a merely "small-ish" window still exposes the whole
+            // design space. An 800x480 window yields a panel of ~1604x962 and is NOT cramped.
+            Assert.IsTrue(NeedsCompact(300, 400), "a very small window should stack");
+        }
+
+        [Test]
+        public void PanelFit_CompactIsOnlyChosenWhenItActuallyFits()
+        {
+            // The breakpoint must sit at or above the stacked layout's own minimum height. If it
+            // were lower, a panel in between would stack and STILL not fit - strictly worse than
+            // staying in two columns.
+            //
+            // A 2560x400 window exposes a 1600x518 panel: short enough to trigger stacking, yet
+            // 518 < 828 so even the stacked layout cannot fit. No layout rescues that window, and
+            // the code must not pretend otherwise - the threshold is therefore set at 830.
+            (float _, float veryShort) =
+                PanelScreenFit.VisiblePanelSize(2560, 400, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+            Assert.Less(veryShort, CompactContentHeight,
+                "the short-window case should be unworkable even when stacked");
+
+            // At the threshold itself the stacked layout must fit, otherwise the breakpoint lies.
+            Assert.GreaterOrEqual(830f, CompactContentHeight,
+                "the stacking threshold is below the stacked layout's minimum height");
         }
 
         [Test]

@@ -116,16 +116,22 @@
 
 /* ===========================================================================
    Narrow layout (the "compact" class is toggled from LifeTerminalController
-   when the root's resolved width drops below CompactWidthThreshold).
+   when the root's resolved size cannot host two columns).
    USS has no media queries - there is no @media and no width-based selector,
    so the switch MUST come from code watching GeometryChangedEvent.
+
+   Sizing rule in this mode: the grid must be the element that absorbs spare
+   height, and the archive gets a bounded scroll strip. Letting .display keep
+   flex-grow: 1 starves the archive (observed in a 1280x720 Player capture:
+   the list collapsed to one visible row while the display held a large empty
+   band below the grid).
    =========================================================================== */
 .compact .workspace { flex-direction: column; }
-.compact .display { margin-right: 0; margin-bottom: 10px; min-width: 0; }
-.compact .life-grid { min-height: 60px; }
-.compact .library { width: auto; flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.compact .display { flex-grow: 0; margin-right: 0; margin-bottom: 10px; min-width: 0; }
+.compact .life-grid { flex-grow: 0; min-height: 300px; }
+.compact .library { width: auto; flex-grow: 1; flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
 .compact .section-title,
 .compact .archive-note { width: 100%; }
-.compact .preset-scroll { width: 100%; flex-grow: 0; min-height: 88px; max-height: 88px; }
+.compact .preset-scroll { width: 100%; flex-grow: 1; min-height: 132px; }
 .compact .field-label { width: 100%; }
 .compact .dropdown { width: 180px; }
