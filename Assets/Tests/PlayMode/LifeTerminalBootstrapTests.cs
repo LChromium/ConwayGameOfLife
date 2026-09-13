@@ -441,9 +441,15 @@ namespace ConwayGameOfLife.Tests
             int startFrame = Time.frameCount;
 
             const float window = 2.0f;
+            float worstFrame = 0f;
             while (Time.realtimeSinceStartup - start < window && Time.frameCount - startFrame < 2000)
             {
                 yield return null;
+                float frameSeconds = Time.unscaledDeltaTime;
+                if (frameSeconds > worstFrame)
+                {
+                    worstFrame = frameSeconds;
+                }
             }
 
             float elapsed = Time.realtimeSinceStartup - start;
@@ -452,12 +458,34 @@ namespace ConwayGameOfLife.Tests
             Press(play); // pause before reporting
 
             float achieved = advanced / elapsed;
-            Debug.Log($"[clock] requested={requestedRate} gen/s  advanced={advanced} generations " +
-                      $"in {elapsed:F2}s over {frames} frames  => {achieved:F1} gen/s achieved " +
-                      $"(editor PlayMode)");
+            float meanFrameMs = elapsed * 1000f / Mathf.Max(frames, 1);
+            float worstFrameMs = worstFrame * 1000f;
+
+            // This is measured WHILE the board is evolving, which is the case the earlier Player
+            // sample missed entirely (it sampled a paused terminal). The figures are frame DELTAS,
+            // so they include presentation and any pacing - they are not "compute cost".
+            Debug.Log($"[clock-running] requested={requestedRate} gen/s  achieved={achieved:F1} gen/s  " +
+                      $"advanced={advanced} generations  elapsed={elapsed:F2}s over {frames} frames  " +
+                      $"meanFrameMs={meanFrameMs:F3}  worstFrameMs={worstFrameMs:F3}  " +
+                      $"runtime=Unity Editor PlayMode (NOT a Player build)");
 
             Assert.Greater(frames, 10, "not enough frames elapsed to judge the clock");
             Assert.Greater(advanced, 0, "the clock advanced no generations across real frames");
+
+            // Time the rule step itself while the simulation is genuinely live.
+            LifeSimulation live = ReadSimulation(controller);
+            const int timedSteps = 2000;
+            var stepWatch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < timedSteps; i++)
+            {
+                live.Step();
+            }
+
+            stepWatch.Stop();
+            double msPerStep = stepWatch.Elapsed.TotalMilliseconds / timedSteps;
+            Debug.Log($"[clock-running] engine step cost while evolving: {msPerStep:F4} ms/generation " +
+                      $"({timedSteps} steps, board {live.Width}x{live.Height} = {live.Width * live.Height} cells, " +
+                      $"Unity Editor runtime)");
 
             // The accumulator drives generations from unscaledDeltaTime, so the achieved rate must
             // land near the requested rate (not below half, and never above double).
@@ -465,6 +493,9 @@ namespace ConwayGameOfLife.Tests
                 $"the clock achieved only {achieved:F1} gen/s against a requested {requestedRate} gen/s");
             Assert.Less(achieved, requestedRate * 2f,
                 $"the clock ran at {achieved:F1} gen/s, far above the requested {requestedRate} gen/s");
+
+            Assert.LessOrEqual(worstFrameMs, 250f,
+                $"worst frame was {worstFrameMs:F0} ms while evolving - a visible hitch");
         }
 
         [UnityTest]

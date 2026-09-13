@@ -11,26 +11,20 @@ namespace ConwayGameOfLife
         private const int GridHeight = 64;
 
         /// <summary>
-        /// Panel width below which the workspace stacks, in panel units.
+        /// Panel width below which the workspace stacks the archive under the grid, in panel units.
         ///
-        /// Set below the narrowest target viewport (1280x720 exposes the full 1600 design space,
-        /// and even a 16:10 viewport exposes 1518), so ordinary targets keep the two-column layout
-        /// and only a genuinely cramped panel stacks.
+        /// 1280 is chosen against a non-obvious property of the fit transform. With
+        /// MatchWidthOrHeight at 0.5 the visible panel width is sqrt(screenW * screenH * 16/9) - the
+        /// window's aspect ratio cancels out, so width depends only on the window's AREA. A landscape
+        /// 1024x768 window therefore exposes ~1386 units and keeps two columns, while a portrait
+        /// 600x1000 window exposes only ~930 and must stack. The narrowest panel any window can
+        /// produce is 1200 (at 1:1), so the threshold has to sit above that to be reachable at all.
+        ///
+        /// A purely HORIZONTAL decision: stacking frees horizontal room. Height shortage is absorbed
+        /// by the scrolling archive instead, since the stacked layout is itself ~828 units tall and
+        /// cannot rescue a short panel.
         /// </summary>
-        private const float DesignWidth = 1100f;
-
-        /// <summary>
-        /// Panel height below which the workspace stacks, in panel units.
-        ///
-        /// 830 is the stacked layout's MINIMUM content height (828), rounded up. Setting the
-        /// breakpoint lower would be self-defeating: between that lower value and 828 the layout
-        /// would stack and still not fit, which is worse than staying in two columns.
-        ///
-        /// An earlier version used 949 - a figure taken from a 900-tall panel whose free space had
-        /// already been absorbed by growing children - which forced every 16:9 viewport into the
-        /// stacked layout even though two columns fit them with room to spare.
-        /// </summary>
-        private const float SideBySideContentHeight = 830f;
+        private const float DesignWidth = 1280f;
 
         private LifeSimulation simulation;
         private LifeGridElement grid;
@@ -95,17 +89,25 @@ namespace ConwayGameOfLife
             ApplyCompactClass(evt.target as VisualElement);
         }
 
+        /// <summary>
+        /// Applies the stacked layout when the panel is too narrow for two columns.
+        ///
+        /// Keyed on WIDTH ONLY, deliberately. An earlier version also stacked when the panel was
+        /// short, which cannot work: the stacked layout is itself ~828 units tall, so a 700-unit
+        /// panel switched layout and still did not fit - strictly worse than staying in two columns
+        /// and letting the archive scroll. Height shortage is absorbed by the scrolling archive
+        /// inside each layout; it is not something the breakpoint can fix.
+        /// </summary>
         private static void ApplyCompactClass(VisualElement root)
         {
             if (root == null)
                 return;
 
             float width = root.resolvedStyle.width;
-            float height = root.resolvedStyle.height;
-            if (float.IsNaN(width) || float.IsNaN(height) || width <= 0f || height <= 0f)
+            if (float.IsNaN(width) || width <= 0f)
                 return;
 
-            bool compact = width < DesignWidth || height < SideBySideContentHeight;
+            bool compact = width < DesignWidth;
             if (root.ClassListContains("compact") != compact)
                 root.EnableInClassList("compact", compact);
         }

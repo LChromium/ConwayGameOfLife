@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The runtime layout probe is a diagnostic tool wired up by
+  [RuntimeInitializeOnLoadMethod]. Managed code stripping removes that registration in a release
+  build: the built assembly still contained the probe's strings but no reference to Detect(),
+  so the probe silently never ran.
+
+  Preserving the type explicitly is preferable to making every measurement build a development
+  build, because the point of the measurement is to reflect the shipped configuration.
+-->
+<linker>
+  <assembly fullname="ConwayGameOfLife.Runtime">
+    <type fullname="ConwayGameOfLife.RuntimeLayoutProbe" preserve="all" />
+  </assembly>
+</linker>

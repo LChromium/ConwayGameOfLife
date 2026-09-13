@@ -6,14 +6,25 @@ namespace ConwayGameOfLife
     /// Mirrors Unity's UI Toolkit <c>PanelScaleMode.ScaleWithScreenSize</c> fit transform so the
     /// layout can be reasoned about at any resolution without resizing an actual window.
     ///
-    /// UI Toolkit scales the panel with, for a match value of m:
-    ///     scale = screenW^m * screenH^(1-m) / (refW^m * refH^(1-m))
-    /// which is the geometric interpolation Unity documents for MatchWidthOrHeight. The visible
-    /// region of the panel, expressed in panel units, is then physical size / scale.
+    /// The scale is a LINEAR interpolation between the width ratio and the height ratio:
+    ///     scale = lerp(screenW / refW, screenH / refH, match)
     ///
-    /// This exists because the PlayMode test host renders at a fixed 640x480: the math lets the
-    /// 1280x720 and 1920x1080 cases be verified as arithmetic, while an actual screenshot remains
-    /// required to sign off on appearance.
+    /// <para>
+    /// <b>This contradicts Unity's documentation</b>, which describes MatchWidthOrHeight as a
+    /// logarithmic interpolation (screenW^m * screenH^(1-m) / ...). The formula above was derived
+    /// from measurement, not from the docs: at 600x1000 against a 1600x900 reference the
+    /// logarithmic form predicts a scale of 0.6454 and a panel width of 929.5, while the running
+    /// Player reported 807.48. The linear form gives lerp(0.375, 1.1111, 0.5) = 0.7431, and
+    /// 600 / 0.7431 = 807.4 - matching the Player to within rounding.
+    ///
+    /// The two forms agree at 16:9 aspect ratios, which is why every earlier 16:9 sample looked
+    /// like confirmation. They diverge on any other aspect ratio.
+    /// </para>
+    ///
+    /// This exists because the PlayMode test host renders at a fixed 640x480: the math lets other
+    /// resolutions be reasoned about without resizing a window, while an actual screenshot remains
+    /// required to sign off on appearance. The formula is re-verified against a running Player by
+    /// <c>RuntimeLayoutProbe</c>, which records the predicted and observed panel side by side.
     /// </summary>
     public static class PanelScreenFit
     {
@@ -27,9 +38,9 @@ namespace ConwayGameOfLife
 
             match = Math.Clamp(match, 0f, 1f);
 
-            double logWidth = Math.Log((double)screenWidth / referenceWidth);
-            double logHeight = Math.Log((double)screenHeight / referenceHeight);
-            return (float)Math.Exp(match * logHeight + (1.0 - match) * logWidth);
+            float widthRatio = (float)screenWidth / referenceWidth;
+            float heightRatio = (float)screenHeight / referenceHeight;
+            return widthRatio + (heightRatio - widthRatio) * match;
         }
 
         /// <summary>

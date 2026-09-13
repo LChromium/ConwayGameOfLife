@@ -74,39 +74,73 @@ namespace ConwayGameOfLife
                 yield return null;
             }
 
-            string stamp = $"{Screen.width}x{Screen.height}";
-            string shot = Path.Combine(outputRoot, $"player-{stamp}.png");
-            ScreenCapture.CaptureScreenshot(shot, 1);
-
+            // Both scenarios are sampled with the SAME frame-rate cap, so their figures are
+            // comparable. The cap is recorded because it makes the number "configured frame-time
+            // budget observed", NOT "how long a frame costs to compute".
+            Application.targetFrameRate = FrameRateCap;
+            QualitySettings.vSyncCount = 0;
             for (int i = 0; i < 10; i++)
             {
                 yield return null;
             }
 
-            yield return MeasureFrameCost();
+            // Scenario A: idle. The archive was just loaded, which pauses the clock, so this is the
+            // "nothing is evolving" case - it must never be presented as gameplay performance.
+            yield return Sample("paused", () => { });
 
-            VisualElement root = FindAttachedRoot();
-            WriteRecord(outputRoot, shot, root);
+            // Scenario B: evolving at the slider's maximum rate. This is the case that exercises
+            // continuous rule advancement AND the per-generation grid repaint it triggers.
+            int genBefore = ReadGeneration();
+            yield return Sample("running-20gps", () => SetRunning(true, 20));
+            int genAfter = ReadGeneration();
+            SetRunning(false, 20);
+
+            string stamp = $"{Screen.width}x{Screen.height}";
+            string shot = Path.Combine(outputRoot, $"player-{stamp}.png");
+            ScreenCapture.CaptureScreenshot(shot, 1);
+            for (int i = 0; i < 10; i++)
+            {
+                yield return null;
+            }
+
+            bool compact = FindAttachedRoot()?.ClassListContains("compact") ?? false;
+            WriteRecord(outputRoot, shot, FindAttachedRoot(), genAfter - genBefore, compact);
 
             yield return new WaitForSeconds(0.5f);
             Application.Quit(0);
         }
+
+        private const int FrameRateCap = 120;
+
+        private int pausedFrames;
+        private double pausedTotalMs;
+        private double pausedWorstMs;
+        private int runningFrames;
+        private double runningTotalMs;
+        private double runningWorstMs;
+        private int pausedGenDelta;
+        private int runningGenDelta;
+
         /// <summary>
-        /// Samples real frame times from the running Player: no synthetic call loop, so the numbers
-        /// include game code, UI Toolkit layout and Painter2D repaint, and presentation. These are
-        /// the figures that must never be conflated with the rule-engine micro-benchmark.
+        /// Samples real frame deltas for one scenario. The setup action runs first so the scenario
+        /// is already active for the whole window, and the generation counter is recorded on both
+        /// sides so the record proves whether anything was actually evolving.
         /// </summary>
-        private IEnumerator MeasureFrameCost()
+        private IEnumerator Sample(string label, Action setup)
         {
-            // Discard the first frames after capture; they include the screenshot write.
+            setup();
+
+            // Settle: let the scenario take effect (and discard the frames disturbed by it).
             for (int i = 0; i < 30; i++)
             {
                 yield return null;
             }
 
-            frameSampleCount = 0;
+            int genStart = ReadGeneration();
+            int frames = 0;
             double total = 0.0;
             double worst = 0.0;
+
             for (int i = 0; i < 240; i++)
             {
                 yield return null;
@@ -117,16 +151,74 @@ namespace ConwayGameOfLife
                     worst = ms;
                 }
 
-                frameSampleCount++;
+                frames++;
             }
 
-            frameSampleTotalMs = total;
-            frameSampleWorstMs = worst;
+            int genDelta = ReadGeneration() - genStart;
+
+            if (label == "paused")
+            {
+                pausedFrames = frames;
+                pausedTotalMs = total;
+                pausedWorstMs = worst;
+                pausedGenDelta = genDelta;
+            }
+            else
+            {
+                runningFrames = frames;
+                runningTotalMs = total;
+                runningWorstMs = worst;
+                runningGenDelta = genDelta;
+            }
+
+            Debug.Log($"[layout-probe] sample '{label}': {frames} frames, mean {total / frames:F3} ms, " +
+                      $"worst {worst:F3} ms, generations advanced {genDelta}");
         }
 
-        private int frameSampleCount;
-        private double frameSampleTotalMs;
-        private double frameSampleWorstMs;
+        private int ReadGeneration()
+        {
+            foreach (LifeTerminalController controller in FindObjectsByType<LifeTerminalController>(
+                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                var field = typeof(LifeTerminalController).GetField(
+                    "simulation",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (field?.GetValue(controller) is LifeSimulation simulation)
+                {
+                    return simulation.Generation;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>Drives the real controls: the play button and the speed slider.</summary>
+        private void SetRunning(bool running, int generationsPerSecond)
+        {
+            VisualElement root = FindAttachedRoot();
+            if (root == null)
+            {
+                return;
+            }
+
+            var speedField = typeof(LifeTerminalController).GetField(
+                "speedSlider",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+            foreach (LifeTerminalController controller in FindObjectsByType<LifeTerminalController>(
+                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (speedField?.GetValue(controller) is SliderInt slider)
+                {
+                    slider.value = generationsPerSecond;
+                }
+
+                var runningField = typeof(LifeTerminalController).GetField(
+                    "running",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                runningField?.SetValue(controller, running);
+            }
+        }
 
         /// <summary>
         /// Selects the pulsar through its real preset button so the capture shows the largest
@@ -155,7 +247,8 @@ namespace ConwayGameOfLife
             }
         }
 
-        private static VisualElement FindAttachedRoot()        {
+        private static VisualElement FindAttachedRoot()
+        {
             foreach (UIDocument document in FindObjectsByType<UIDocument>(
                          FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
@@ -169,7 +262,18 @@ namespace ConwayGameOfLife
             return null;
         }
 
-        private void WriteRecord(string outputRoot, string screenshot, VisualElement root)
+        /// <summary>Which rule caused the stacked layout, or "none".</summary>
+        private static string CompactTrigger(float panelWidth, float panelHeight)
+        {
+            if (panelWidth < 1280f)
+            {
+                return "width";
+            }
+
+            return "none";
+        }
+
+        private void WriteRecord(string outputRoot, string screenshot, VisualElement root, int generationDelta, bool compactObserved)
         {
             var sb = new StringBuilder();
             sb.Append('{');
@@ -179,19 +283,22 @@ namespace ConwayGameOfLife
             sb.Append($"\"screenshot\":\"{screenshot.Replace('\\', '/')}\",");
             sb.Append($"\"platform\":\"{Application.platform}\",");
             sb.Append($"\"isEditor\":{Application.isEditor.ToString().ToLowerInvariant()},");
+            sb.Append($"\"targetFrameRate\":{Application.targetFrameRate},");
+            sb.Append($"\"vSyncCount\":{QualitySettings.vSyncCount},");
 
             if (root != null)
             {
                 Rect panel = root.panel.visualTree.worldBound;
-                sb.Append($"\"compact\":{root.ClassListContains("compact").ToString().ToLowerInvariant()},");
+                sb.Append($"\"compact\":{compactObserved.ToString().ToLowerInvariant()},");
                 sb.Append($"\"panelWidth\":{panel.width:F2},");
                 sb.Append($"\"panelHeight\":{panel.height:F2},");
                 sb.Append($"\"rootWidth\":{root.resolvedStyle.width:F2},");
                 sb.Append($"\"rootHeight\":{root.resolvedStyle.height:F2},");
+                sb.Append($"\"compactTriggeredBy\":\"{CompactTrigger(panel.width, panel.height)}\",");
 
-                // Cross-check PanelScreenFit against what UI Toolkit actually laid out. This is the
-                // only place the pure-function model meets the engine's real ScaleWithScreenSize
-                // behaviour, so the deltas are recorded rather than asserted away.
+                // Cross-check PanelScreenFit against what UI Toolkit actually laid out. The predicted
+                // side uses the FORMULA's output, not the observed panel, so the comparison is a real
+                // cross-check rather than a restatement of the measurement.
                 const int refWidth = 1600;
                 const int refHeight = 900;
                 (float predictedWidth, float predictedHeight) =
@@ -201,22 +308,36 @@ namespace ConwayGameOfLife
                 sb.Append($"\"predictedPanelHeight\":{predictedHeight:F2},");
                 sb.Append($"\"panelWidthDelta\":{(panel.width - predictedWidth):F2},");
                 sb.Append($"\"panelHeightDelta\":{(panel.height - predictedHeight):F2},");
-                sb.Append($"\"predictedCompact\":{(panel.width < 1100f || panel.height < 640f).ToString().ToLowerInvariant()},");
+                sb.Append($"\"predictedCompact\":{(predictedWidth < 1280f).ToString().ToLowerInvariant()},");
+                sb.Append($"\"compactPredictionMatches\":{(compactObserved == (predictedWidth < 1280f)).ToString().ToLowerInvariant()},");
+
+                // The grid height is in PANEL UNITS (design space), not physical pixels.
+                VisualElement grid = root.Q(className: "life-grid");
+                sb.Append($"\"gridHeightPanelUnits\":{(grid != null ? grid.worldBound.height : 0f):F2},");
 
                 VisualElement display = root.Q(className: "display");
                 VisualElement library = root.Q(className: "library");
-                VisualElement grid = root.Q(className: "life-grid");
                 sb.Append($"\"displayWidth\":{(display != null ? display.worldBound.width : 0f):F2},");
                 sb.Append($"\"displayHeight\":{(display != null ? display.worldBound.height : 0f):F2},");
                 sb.Append($"\"libraryWidth\":{(library != null ? library.worldBound.width : 0f):F2},");
-                sb.Append($"\"gridHeight\":{(grid != null ? grid.worldBound.height : 0f):F2},");
-                sb.Append($"\"footerBottom\":{(root.Q(className: "footer")?.worldBound.yMax ?? 0f):F2},");
+                sb.Append($"\"footerBottomPanelUnits\":{(root.Q(className: "footer")?.worldBound.yMax ?? 0f):F2},");
             }
 
-            sb.Append($"\"frameSampleCount\":{frameSampleCount},");
-            sb.Append($"\"frameMeanMs\":{(frameSampleCount > 0 ? frameSampleTotalMs / frameSampleCount : 0.0):F3},");
-            sb.Append($"\"frameWorstMs\":{frameSampleWorstMs:F3},");
-            sb.Append($"\"frameMeanFps\":{(frameSampleCount > 0 && frameSampleTotalMs > 0 ? frameSampleCount * 1000.0 / frameSampleTotalMs : 0.0):F1},");
+            // Two clearly separated scenarios. Deliberately NOT averaged together: the paused case
+            // does no rule work and triggers no grid repaint, so blending it into the running case
+            // would flatter the numbers.
+            sb.Append($"\"pausedFrames\":{pausedFrames},");
+            sb.Append($"\"pausedMeanMs\":{(pausedFrames > 0 ? pausedTotalMs / pausedFrames : 0.0):F3},");
+            sb.Append($"\"pausedWorstMs\":{pausedWorstMs:F3},");
+            sb.Append($"\"pausedGenerationsAdvanced\":{pausedGenDelta},");
+
+            sb.Append($"\"runningFrames\":{runningFrames},");
+            sb.Append($"\"runningMeanMs\":{(runningFrames > 0 ? runningTotalMs / runningFrames : 0.0):F3},");
+            sb.Append($"\"runningWorstMs\":{runningWorstMs:F3},");
+            sb.Append($"\"runningGenerationsAdvanced\":{runningGenDelta},");
+            sb.Append($"\"runningMeanFps\":{(runningFrames > 0 && runningTotalMs > 0 ? runningFrames * 1000.0 / runningTotalMs : 0.0):F1},");
+            sb.Append($"\"runningFpsPerGeneration\":{(runningGenDelta > 0 && runningTotalMs > 0 ? runningGenDelta * 1000.0 / runningTotalMs : 0.0):F2},");
+
             sb.Append($"\"utc\":\"{DateTime.UtcNow:O}\"");
             sb.Append('}');
 

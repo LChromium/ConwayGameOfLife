@@ -56,11 +56,11 @@
 }
 .screen-bar { height: 30px; flex-shrink: 0; justify-content: space-between; align-items: center; padding: 0 14px; color: rgb(178, 193, 168); border-bottom-width: 1px; border-bottom-color: rgb(81, 99, 86); }
 .life-grid { flex-grow: 1; min-height: 96px; }
-.readouts { height: 62px; flex-shrink: 0; border-top-width: 1px; border-top-color: rgb(81, 99, 86); padding: 7px 16px; }
+.readouts { height: 74px; flex-shrink: 0; border-top-width: 1px; border-top-color: rgb(81, 99, 86); padding: 10px 16px 0; }
 .readout { min-width: 155px; margin-right: 24px; }
-.readout-caption { color: rgb(139, 158, 141); }
-.readout-value { color: rgb(221, 209, 162); font-size: 24px; margin-top: 4px; }
-.readout-value-compact { color: rgb(221, 209, 162); font-size: 16px; margin-top: 9px; }
+.readout-caption { color: rgb(139, 158, 141); font-size: 11px; }
+.readout-value { color: rgb(221, 209, 162); font-size: 24px; margin-top: 6px; }
+.readout-value-compact { color: rgb(221, 209, 162); font-size: 16px; margin-top: 10px; }
 
 .library { width: 236px; flex-shrink: 0; color: rgb(34, 47, 42); }
 .section-title { font-size: 14px; flex-shrink: 0; margin-bottom: 4px; }
@@ -91,7 +91,14 @@
 .preset:hover { background-color: rgb(92, 106, 97); }
 .preset.selected { background-color: rgb(195, 189, 150); color: rgb(43, 58, 48); border-color: rgb(225, 217, 177) rgb(225, 217, 177) rgb(125, 129, 106) rgb(225, 217, 177); }
 .field-label { margin-top: 11px; margin-bottom: 5px; flex-shrink: 0; }
-.dropdown { height: 34px; flex-shrink: 0; background-color: rgb(59, 72, 65); color: rgb(212, 214, 191); border-width: 1px; border-color: rgb(141, 153, 140); }
+/* The dropdown previously rendered as light text on a light field, which read as a disabled
+   control. It now uses the same dark-well treatment as the readouts. The inner text element is
+   styled too: the background/color on the field alone does not reach it in UI Toolkit. */
+.dropdown { height: 34px; flex-shrink: 0; background-color: rgb(38, 42, 42); border-width: 1px; border-color: rgb(141, 153, 140); }
+.dropdown .unity-base-field__label,
+.dropdown .unity-base-popup-field__input,
+.dropdown .unity-text-element { color: rgb(224, 225, 201); }
+.dropdown .unity-base-popup-field__input { background-color: rgb(38, 42, 42); }
 
 .controls { height: 48px; flex-shrink: 0; align-items: flex-end; padding-top: 8px; }
 .control {
