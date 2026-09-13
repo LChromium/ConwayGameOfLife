@@ -111,5 +111,21 @@
 .speed-slider { width: 150px; margin-bottom: 9px; }
 .speed-value { color: rgb(37, 58, 48); width: 70px; margin: 0 8px 13px 8px; }
 .spacer { flex-grow: 1; }
-.footer { height: 36px; justify-content: space-between; align-items: flex-end; color: rgb(146, 151, 142); }
+.footer { height: 36px; flex-shrink: 0; justify-content: space-between; align-items: flex-end; color: rgb(146, 151, 142); }
 .plate { font-size: 10px; border-width: 1px; border-color: rgb(116, 124, 112); padding: 3px 7px; }
+
+/* ===========================================================================
+   Narrow layout (the "compact" class is toggled from LifeTerminalController
+   when the root's resolved width drops below CompactWidthThreshold).
+   USS has no media queries - there is no @media and no width-based selector,
+   so the switch MUST come from code watching GeometryChangedEvent.
+   =========================================================================== */
+.compact .workspace { flex-direction: column; }
+.compact .display { margin-right: 0; margin-bottom: 10px; min-width: 0; }
+.compact .life-grid { min-height: 60px; }
+.compact .library { width: auto; flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.compact .section-title,
+.compact .archive-note { width: 100%; }
+.compact .preset-scroll { width: 100%; flex-grow: 0; min-height: 88px; max-height: 88px; }
+.compact .field-label { width: 100%; }
+.compact .dropdown { width: 180px; }

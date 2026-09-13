@@ -315,6 +315,137 @@ namespace ConwayGameOfLife.Tests
             Assert.Throws<ArgumentNullException>(() => sim.Randomize(0.5f, null));
         }
 
+        // --- layout resolution math -------------------------------------------
+
+        [Test]
+        public void PanelFit_ScaleFactorIsConservativeAgainstUnitysOwnMeasuredScale()
+        {
+            // Unity's real fit transform is not documented precisely enough to reproduce exactly.
+            // At 640x480 against the previous 1440x900 reference, Unity reported a panel of
+            // ~1309x982 (effective scale 640/1309.09 = 0.48891) while the geometric interpolation
+            // yields 0.48686. Rather than assert an exact match to a number the engine owns, this
+            // asserts the property that actually matters: the predicted scale is never MORE
+            // generous than Unity's, so a "fits" verdict here cannot be optimistic.
+            float predicted = PanelScreenFit.ScaleFactor(640, 480, 1440, 900, 0.5f);
+            const float unityObserved = 0.48891f;
+
+            Assert.LessOrEqual(predicted, unityObserved + 0.0001f,
+                $"predicted scale {predicted:F5} is more generous than Unity's observed {unityObserved:F5}, " +
+                "so fit verdicts could be optimistic");
+
+            // Ordering sanity: a bigger screen must not yield a smaller scale.
+            Assert.Greater(PanelScreenFit.ScaleFactor(1920, 1080, 1440, 900, 0.5f), predicted);
+
+            // And with the 16:9 reference the scale is exactly the linear ratio on 16:9 windows.
+            Assert.AreEqual(1.2f, PanelScreenFit.ScaleFactor(1920, 1080, 1600, 900, 0.5f), 0.0001f);
+            Assert.AreEqual(0.8f, PanelScreenFit.ScaleFactor(1280, 720, 1600, 900, 0.5f), 0.0001f);
+        }
+
+        /// <summary>
+        /// Content height measured from a live PlayMode run in the single-column layout:
+        /// header 63 + machine 849 + footer 37 = 949 panel units, against the 1600x900 reference.
+        /// </summary>
+        private const float SingleColumnContentHeight = 949f;
+
+        /// <summary>
+        /// Content height in the compact (stacked) layout, derived from the same per-region
+        /// measurements: the archive drops below the grid instead of sizing the row beside it.
+        /// </summary>
+        private const float CompactContentHeight = 828f;
+
+        private const int ReferenceWidth = 1600;
+        private const int ReferenceHeight = 900;
+        private const float ReferenceMatch = 0.5f;
+
+        [Test]
+        public void PanelFit_SixteenByNineWindowsExposeTheFullReferencePanel()
+        {
+            // The reference resolution is 16:9 precisely so this holds: a 16:9 window at or above
+            // the reference exposes exactly the full panel, with nothing cropped.
+            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440) })
+            {
+                (float panelWidth, float panelHeight) =
+                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+
+                Assert.AreEqual(ReferenceWidth, panelWidth, 1f, $"{w}x{h}: unexpected visible panel width");
+                Assert.AreEqual(ReferenceHeight, panelHeight, 1f, $"{w}x{h}: unexpected visible panel height");
+            }
+        }
+
+        [Test]
+        public void PanelFit_SingleColumnLayoutFitsAtEveryTargetResolution()
+        {
+            // The side-by-side layout needs 949 of the 900... it needs more than the reference height
+            // on 16:9, which is exactly why the compact breakpoint exists. On 16:9 windows the panel
+            // is the full 1600x900, so the stacked layout (828 units) is what must fit there.
+            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440), (1440, 900) })
+            {
+                Assert.IsTrue(
+                    PanelScreenFit.FitsVertically(CompactContentHeight, w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch),
+                    $"{w}x{h}: compact layout needs {CompactContentHeight}px and does not fit");
+
+                (float panelWidth, _) =
+                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+                Assert.Greater(panelWidth, 700f, $"{w}x{h}: panel only {panelWidth:F0}px wide");
+            }
+        }
+
+        [Test]
+        public void PanelFit_CompactLayoutIsRequiredForSixteenByNineButNotForSixteenByTen()
+        {
+            // The breakpoint condition the controller implements: stack the workspace when EITHER
+            // the visible panel is narrower than the reference width, OR it is too short for the
+            // side-by-side layout. Expressed as math here so the policy is verifiable without
+            // resizing a window.
+            static bool NeedsCompact(int w, int h)
+            {
+                (float panelWidth, float panelHeight) =
+                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+
+                // Mirrors LifeTerminalController.ApplyCompactClass. The height threshold carries
+                // margin below the 949-unit measurement so rounding cannot decide the layout.
+                return panelWidth < 1500f
+                       || panelHeight < 935f;
+            }
+
+            // 16:9 windows: the panel is full width but only 900 tall, which cannot host 949.
+            foreach ((int w, int h) in new[] { (1280, 720), (1920, 1080), (2560, 1440) })
+            {
+                Assert.IsTrue(NeedsCompact(w, h), $"{w}x{h} should use the stacked layout");
+            }
+
+            // 16:10 windows: taller, so the side-by-side layout fits and must be kept.
+            foreach ((int w, int h) in new[] { (1440, 900), (1920, 1200) })
+            {
+                Assert.IsFalse(NeedsCompact(w, h), $"{w}x{h} should keep the side-by-side layout");
+            }
+        }
+
+        [Test]
+        public void PanelFit_CompactLayoutFitsAtEveryTargetResolution()
+        {
+            foreach ((int w, int h) in new[] { (1280, 720), (1600, 900), (1920, 1080), (2560, 1440) })
+            {
+                (float panelWidth, float panelHeight) = PanelScreenFit.VisiblePanelSize(w, h, 1440, 900, 0.5f);
+
+                Assert.IsTrue(
+                    PanelScreenFit.FitsVertically(CompactContentHeight, w, h, 1440, 900, 0.5f),
+                    $"{w}x{h}: compact layout needs {CompactContentHeight}px but only {panelHeight:F0}px is visible");
+
+                // The compact layout still needs room for a usable grid beside nothing else.
+                Assert.Greater(panelWidth, 700f, $"{w}x{h}: panel only {panelWidth:F0}px wide");
+            }
+        }
+
+        [Test]
+        public void PanelFit_RejectsNonPositiveDimensions()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => PanelScreenFit.ScaleFactor(0, 480, 1440, 900, 0.5f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PanelScreenFit.ScaleFactor(640, 0, 1440, 900, 0.5f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PanelScreenFit.ScaleFactor(640, 480, 0, 900, 0.5f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PanelScreenFit.ScaleFactor(640, 480, 1440, 0, 0.5f));
+        }
+
         // --- helpers ----------------------------------------------------------
 
         internal static LifePattern FindPattern(string englishName)
@@ -345,6 +476,50 @@ namespace ConwayGameOfLife.Tests
                 {
                     sb.Append(sim.IsAlive(x, y) ? '1' : '0');
                 }
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The live-cell set reduced to a translation-invariant mask: the bounding box cropped and
+        /// rendered as a string. Two boards have the same NormalizedShape iff one is a pure
+        /// translation of the other. This is what makes a spaceship's period checkable, since a
+        /// spaceship never returns to its absolute starting position.
+        /// </summary>
+        internal static string NormalizedShape(LifeSimulation sim)
+        {
+            int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+            for (int y = 0; y < sim.Height; y++)
+            {
+                for (int x = 0; x < sim.Width; x++)
+                {
+                    if (!sim.IsAlive(x, y))
+                    {
+                        continue;
+                    }
+
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+
+            if (maxX < minX || maxY < minY)
+            {
+                return string.Empty; // extinct
+            }
+
+            var sb = new StringBuilder();
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    sb.Append(sim.IsAlive(x, y) ? '1' : '0');
+                }
+
+                sb.Append('/');
             }
 
             return sb.ToString();

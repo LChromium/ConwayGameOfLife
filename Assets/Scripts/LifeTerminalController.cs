@@ -10,6 +10,29 @@ namespace ConwayGameOfLife
         private const int GridWidth = 96;
         private const int GridHeight = 64;
 
+        /// <summary>
+        /// Panel width that triggers the stacked layout, in panel units.
+        ///
+        /// 1500 sits between the two measured cases: a 16:9 window exposes the full 1600, while a
+        /// 1440x900 (16:10) window exposes 1518. Taking 1600 here would have pushed 16:10 windows
+        /// into the stacked layout even though they have room for two columns.
+        ///
+        /// The workspace also stacks when the visible height cannot host the side-by-side layout.
+        /// USS has no media queries, so the switch is driven from code by watching the root's
+        /// resolved size; see <see cref="OnRootGeometryChanged"/>.
+        /// </summary>
+        private const float DesignWidth = 1500f;
+
+        /// <summary>
+        /// Panel height below which the workspace stacks, in panel units.
+        ///
+        /// The side-by-side layout measures 949 units tall. This threshold sits a little under that
+        /// so a 16:9 window (900 units) always stacks, while a 16:10 window (949) keeps two columns.
+        /// It is deliberately not exactly 949: relying on "< 949" against a 949 measurement has no
+        /// margin at all, and rounding would decide the layout.
+        /// </summary>
+        private const float SideBySideContentHeight = 935f;
+
         private LifeSimulation simulation;
         private LifeGridElement grid;
         private Label generationLabel;
@@ -43,7 +66,13 @@ namespace ConwayGameOfLife
             PanelSettings panelSettings = ScriptableObject.CreateInstance<PanelSettings>();
             panelSettings.name = "Life Terminal Panel Settings";
             panelSettings.scaleMode = PanelScaleMode.ScaleWithScreenSize;
-            panelSettings.referenceResolution = new Vector2Int(1440, 900);
+
+            // 16:9, because that is the shape this project is reviewed at (1280x720, 1920x1080).
+            // The VisiblePanelSize math in PanelScreenFit shows why the aspect ratio of the
+            // reference matters more than its pixel count: against a 16:10 reference, a 16:9 window
+            // exposes only ~854 panel units of height no matter how large the screen is, which
+            // cannot fit the side-by-side layout and forced every 16:9 window into the stacked one.
+            panelSettings.referenceResolution = new Vector2Int(1600, 900);
             panelSettings.screenMatchMode = PanelScreenMatchMode.MatchWidthOrHeight;
             panelSettings.match = 0.5f;
             panelSettings.sortingOrder = 10;
@@ -52,7 +81,34 @@ namespace ConwayGameOfLife
             UIDocument document = gameObject.AddComponent<UIDocument>();
             document.panelSettings = panelSettings;
             BuildInterface(document.rootVisualElement);
+
+            // USS cannot express media queries, so the responsive switch is driven from code by
+            // watching the root's resolved width.
+            document.rootVisualElement.RegisterCallback<GeometryChangedEvent>(OnRootGeometryChanged);
+            ApplyCompactClass(document.rootVisualElement);
+
             LoadPattern(selectedPattern);
+        }
+
+        /// <summary>Toggles the stacked layout when the panel cannot host two columns.</summary>
+        private static void OnRootGeometryChanged(GeometryChangedEvent evt)
+        {
+            ApplyCompactClass(evt.target as VisualElement);
+        }
+
+        private static void ApplyCompactClass(VisualElement root)
+        {
+            if (root == null)
+                return;
+
+            float width = root.resolvedStyle.width;
+            float height = root.resolvedStyle.height;
+            if (float.IsNaN(width) || float.IsNaN(height) || width <= 0f || height <= 0f)
+                return;
+
+            bool compact = width < DesignWidth || height < SideBySideContentHeight;
+            if (root.ClassListContains("compact") != compact)
+                root.EnableInClassList("compact", compact);
         }
 
         private void Update()

@@ -2,7 +2,7 @@
 
 用 Unity 6000.6.0f1 实现康威生命游戏（Conway's Game of Life）的核心逻辑，附带一套可复现的自动化验证。
 
-![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-24%20EditMode%20%2B%2011%20PlayMode-brightgreen)
+![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-32%20EditMode%20%2B%2013%20PlayMode-brightgreen)
 
 ---
 
@@ -74,18 +74,18 @@ unity test . --mode PlayMode --output test-results-playmode.xml
 
 或在 Unity 中打开 **Window → General → Test Runner** 分别运行 EditMode / PlayMode。
 
-**当前结果：EditMode 24/24 通过，PlayMode 11/11 通过。**
+**当前结果：EditMode 32/32 通过，PlayMode 13/13 通过。**
 
 ### 测试覆盖了什么
 
 - **规则正确性**：`Step()` 与一份独立重写的 B3/S23 参考实现，在随机棋盘（含 1×1 到 12×12 各种尺寸）上逐格比对，固定边界与环绕边界各 100 个随机盘面。
-- **样本行为**：稳定状态 4 代不变；周期 2 与周期 ≥3 振荡器在**绝对坐标**下"恰好"于声明周期逐格复原，并断言中途**没有**提前复原；飞船的**完整活细胞集合**必须按同一位移整体平移（不是只看细胞数与包围盒）。
+- **样本行为**：稳定状态 4 代不变；周期 2 与周期 ≥3 振荡器在**绝对坐标**下"恰好"于声明周期逐格复原，并断言中途**没有**提前复原；飞船以**归一化后的完整形状**判定——要求首次复现即声明周期（把 LWSS 的周期 4 写成 8 会被拒绝，该反例本身也是测试）。
 - **边界语义**：环绕与非环绕必须产生不同结果；边缘上的闪烁器在环绕下保持 3 个活细胞。
 - **簿记**：世代计数、存活数统计、越界写入忽略、`Clear`/`LoadCentered`/`Randomize` 的状态重置。
-- **界面自举**（PlayMode）：运行时自举必须装配出完整界面树、成功加载主题样式、按样本数生成按钮，且**不产生任何错误日志**——任何一条 `Debug.LogError` 都会让测试失败。这层专门用来拦住"样式表损坏 / 资源缺失 / Awake 空引用"这类只在运行时暴露的问题。
-- **界面交互**（PlayMode）：用真实按钮事件驱动，断言「单步」推进世代计数、「载入样本」刷新存活数、运行/暂停切换状态文本；并**跨真实帧验证时钟真的在推进**（运行后世代必须增长，暂停后必须不变）。
-- **布局适配**（PlayMode）：每个样本按钮必须落在其面板内且不与边界下拉框重叠；面板空间与屏幕像素两种坐标必须正确换算，机器区域必须完整落在可见视口内。
-- **运行时性能采样**（PlayMode）：经真实 `Update()` 时钟测量每代耗时并断言其远低于 60 fps 帧预算。
+- **界面自举**（PlayMode）：运行时自举必须装配出完整界面树、成功加载主题样式、按样本数生成按钮，且**不产生任何错误日志**——任何一条 `Debug.LogError` 都会让测试失败。
+- **界面交互**（PlayMode）：用真实按钮事件驱动；**跨真实帧验证时钟**（请求 20 代/秒，实测达成 20.0）；**编辑真实棋盘**（保留控制器的模拟与回调）后断言暂停状态、棋盘人口与读数三者一致。
+- **布局适配**（PlayMode + 单测）：样本列表为 `ScrollView`，逐项滚动到可见并可选中，且视口不遮挡边界控件；面板空间与屏幕像素两种坐标正确换算。跨分辨率适配由 [`PanelScreenFit`](Assets/Scripts/PanelScreenFit.cs) 纯函数 + 单元测试覆盖（1280×720 / 1920×1080 / 2560×1440 / 1440×900 / 1920×1200）。
+- **性能口径**（PlayMode）：跨帧测时钟速率；另有一个**明确标注为 SYNTHETIC** 的人工调用微基准，其偏差写在日志与文档里。
 
 ### 独立校验工具（可选）
 
@@ -114,13 +114,14 @@ Assets/
 │   ├── LifeSimulation.cs          # 纯 C# 规则引擎（不依赖 UnityEngine）
 │   ├── LifePatterns.cs            # 8 个内置样本及其分类
 │   ├── LifeGridElement.cs         # 用 Painter2D 自绘网格 + 鼠标编辑
+│   ├── PanelScreenFit.cs          # 面板缩放数学（纯函数，可跨分辨率单测）
 │   └── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
 ├── Tests/
-│   ├── EditMode/                  # 规则、边界、簿记、样本行为（24 项）
+│   ├── EditMode/                  # 规则、边界、簿记、样本行为、分辨率数学（32 项）
 │   │   ├── ConwayGameOfLife.Tests.EditMode.asmdef
 │   │   ├── LifeSimulationTests.cs
 │   │   └── LifePatternTests.cs
-│   └── PlayMode/                  # 界面自举、交互、布局适配、性能采样（11 项）
+│   └── PlayMode/                  # 界面自举、交互、布局适配、性能口径（13 项）
 │       ├── ConwayGameOfLife.Tests.PlayMode.asmdef
 │       └── LifeTerminalBootstrapTests.cs
 ├── Resources/

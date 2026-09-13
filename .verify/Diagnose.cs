@@ -10,7 +10,13 @@ namespace ConwayGameOfLife.Verify
     /// </summary>
     internal static class Diagnose
     {
-        /// <summary>Returns 0 if the shipped pulsar matches the canonical RLE and has period 3.</summary>
+        /// <summary>
+        /// Verifies the shipped PULSAR against the canonical RLE in two independent ways:
+        ///   1. its cell set matches the RLE-decoded set exactly, and
+        ///   2. its measured period equals the declared period.
+        /// Returns 0 only when BOTH hold; 1 otherwise. (Previously it checked coordinates only,
+        /// so the period claim in the summary line was never actually verified.)
+        /// </summary>
         public static int Run()
         {
             LifePattern pulsar = Find("PULSAR");
@@ -80,7 +86,33 @@ namespace ConwayGameOfLife.Verify
             }
 
             Console.WriteLine($"  summary: missing={missing} extra={extra}");
-            return (missing == 0 && extra == 0) ? 0 : 1;
+
+            // Second, independent verification: the declared period must be the measured one.
+            int measuredPeriod = MeasurePeriod(pulsar.Cells, 40);
+            bool periodOk = measuredPeriod == pulsar.Period;
+            Console.WriteLine($"  period: declared={pulsar.Period} measured={(measuredPeriod < 0 ? "none" : measuredPeriod.ToString())} " +
+                              $"-> {(periodOk ? "match" : "MISMATCH")}");
+
+            return (missing == 0 && extra == 0 && periodOk) ? 0 : 1;
+        }
+
+        /// <summary>First generation at which the board repeats its initial state, or -1.</summary>
+        private static int MeasurePeriod(LifeCell[] cells, int maxGenerations)
+        {
+            var sim = new LifeSimulation(64, 64);
+            sim.LoadCentered(cells);
+            string initial = Snapshot(sim);
+
+            for (int generation = 1; generation <= maxGenerations; generation++)
+            {
+                sim.Step();
+                if (Snapshot(sim) == initial)
+                {
+                    return generation;
+                }
+            }
+
+            return -1;
         }
 
         private static LifePattern Find(string name)

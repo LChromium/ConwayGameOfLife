@@ -247,10 +247,12 @@ namespace ConwayGameOfLife.Tests
         }
 
         [Test]
-        public void Spaceships_DoNotRepeatInPlaceAtAnySmallerPeriod()
+        public void Spaceships_HaveNoEarlierTranslatedRepeat()
         {
-            // A spaceship returns to its own shape only after translating; it must never return to
-            // the identical absolute position at a period shorter than the declared one.
+            // A spaceship never returns to its starting POSITION, so "does not repeat in place" is
+            // vacuous for them. The real requirement is that the declared period is the FIRST
+            // generation at which the shape recurs in translated form - otherwise declaring LWSS
+            // as period 8 (instead of 4) would still satisfy every other assertion.
             foreach (LifePattern pattern in LifePatterns.All)
             {
                 if (pattern.Kind != LifePatternKind.Spaceship)
@@ -259,14 +261,97 @@ namespace ConwayGameOfLife.Tests
                 }
 
                 LifeSimulation sim = Load(pattern);
-                string initial = LifeSimulationTests.Snapshot(sim);
 
-                for (int generation = 1; generation < pattern.Period; generation++)
+                // Normalised shape of the starting generation, and of every generation after it.
+                var shapes = new List<string> { LifeSimulationTests.NormalizedShape(sim) };
+                for (int generation = 1; generation <= pattern.Period * 3; generation++)
                 {
                     sim.Step();
-                    Assert.AreNotEqual(initial, LifeSimulationTests.Snapshot(sim),
-                        $"{pattern.EnglishName} returned to its exact starting position at generation {generation}");
+                    shapes.Add(LifeSimulationTests.NormalizedShape(sim));
                 }
+
+                Assert.AreEqual(pattern.Period, FirstShapeRepeat(shapes),
+                    $"{pattern.EnglishName} declares period {pattern.Period}, but its shape first recurs " +
+                    $"at generation {FirstShapeRepeat(shapes)} (translated form)");
+            }
+        }
+
+        [Test]
+        public void SpaceshipPeriodCheck_RejectsAMisdeclaredPeriod()
+        {
+            // Falsification of the assertion above: if the checker cannot reject a wrong period,
+            // then "period 4 verified" means nothing. LWSS/GLIDER really have period 4, so a
+            // declared period of 8 must be rejected, and 4 must be accepted.
+            foreach (LifePattern pattern in LifePatterns.All)
+            {
+                if (pattern.Kind != LifePatternKind.Spaceship)
+                {
+                    continue;
+                }
+
+                LifeSimulation sim = Load(pattern);
+                var shapes = new List<string> { LifeSimulationTests.NormalizedShape(sim) };
+                for (int generation = 1; generation <= 24; generation++)
+                {
+                    sim.Step();
+                    shapes.Add(LifeSimulationTests.NormalizedShape(sim));
+                }
+
+                int measured = FirstShapeRepeat(shapes);
+
+                Assert.AreEqual(4, measured,
+                    $"{pattern.EnglishName} should really have period 4");
+                Assert.AreNotEqual(8, measured,
+                    $"{pattern.EnglishName}: a declared period of 8 must be detected as wrong");
+
+                // And the acceptance side: the correct declaration must match.
+                Assert.AreEqual(pattern.Period, measured,
+                    $"{pattern.EnglishName}: a declared period of {pattern.Period} must be accepted");
+            }
+        }
+
+        /// <summary>
+        /// First generation at which the translated shape recurs, or -1 if it never does within
+        /// the sampled window. This is the honest definition of a spaceship's period.
+        /// </summary>
+        private static int FirstShapeRepeat(List<string> shapes)
+        {
+            for (int generation = 1; generation < shapes.Count; generation++)
+            {
+                if (shapes[generation] == shapes[0])
+                {
+                    return generation;
+                }
+            }
+
+            return -1;
+        }
+
+        [Test]
+        public void Spaceships_AlsoRepeatInTranslationExactlyOnePeriodLater()
+        {
+            // Companion to the test above: confirms the recurrence at the declared period really is
+            // the same shape moved by a constant offset (not merely a coincidentally equal shape).
+            foreach (LifePattern pattern in LifePatterns.All)
+            {
+                if (pattern.Kind != LifePatternKind.Spaceship)
+                {
+                    continue;
+                }
+
+                LifeSimulation sim = Load(pattern);
+                List<(int X, int Y)> initial = LifeSimulationTests.AliveCells(sim);
+
+                for (int i = 0; i < pattern.Period; i++)
+                {
+                    sim.Step();
+                }
+
+                List<(int X, int Y)> after = LifeSimulationTests.AliveCells(sim);
+                int dx = after[0].X - initial[0].X;
+                int dy = after[0].Y - initial[0].Y;
+
+                LifeSimulationTests.AssertSameCells(initial, after, dx, dy, pattern.EnglishName);
             }
         }
 

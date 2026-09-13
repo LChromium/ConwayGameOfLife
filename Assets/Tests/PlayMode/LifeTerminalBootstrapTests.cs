@@ -221,75 +221,138 @@ namespace ConwayGameOfLife.Tests
         }
 
         [UnityTest]
-        public IEnumerator EditingTheBoard_PaintsThroughTheRealElementAndRefreshesTheReadout()
+        public IEnumerator GridElement_PaintsAndRaisesEdited_OnItsOwnObject()
         {
-            // Drives the actual LifeGridElement.Paint path (the same one a mouse click reaches):
-            // bind a simulation, paint a cell, and require the element to fire Edited and the
-            // controller to refresh its readouts. Coordinate mapping itself is not asserted here
-            // because UI Toolkit pointer events cannot be constructed from a test assembly
-            // (the PointerEventBase setters are internal and GetPooled's overloads are internal);
-            // this exercises the editor->controller wiring instead.
+            // Independent grid test: uses a detached LifeGridElement and its own simulation, so it
+            // cannot disturb the live interface. Painting must mutate that simulation and raise
+            // Edited exactly once per real state change.
             yield return Settle();
 
-            VisualElement root = GetRoot();
-            LifeGridElement grid = FindByClass(root, "life-grid") as LifeGridElement;
-            Assert.IsNotNull(grid, "missing LifeGridElement");
-
-            Label population = ReadoutValue(root, "POPULATION");
-            Button randomize = FindButton(root, "随机播种");
-            Button clear = FindButton(root, "清空");
-            Assert.IsNotNull(randomize, "missing randomize button");
-            Assert.IsNotNull(clear, "missing clear button");
-
+            var grid = new LifeGridElement();
             var sim = new LifeSimulation(24, 24);
             grid.Bind(sim);
 
-            bool editedFired = false;
-            grid.Edited = () => editedFired = true;
+            int editedCount = 0;
+            grid.Edited = () => editedCount++;
 
             PaintCellForTest(grid, 3, 4);
-            Assert.IsTrue(editedFired, "painting a cell must notify the controller through Edited");
+
+            Assert.AreEqual(1, editedCount, "painting a cell must raise Edited once");
             Assert.IsTrue(sim.IsAlive(3, 4), "the painted cell should be alive");
             Assert.AreEqual(1, sim.Population, "painting one cell should raise the population to 1");
 
-            // The controller must also stop running and refresh when an edit arrives.
-            grid.Edited = () => { };
-            Press(clear);
-            yield return null;
-            Assert.AreEqual("0000", population.text, "clearing must refresh the population readout");
+            // Painting the same cell again toggles it back off and notifies again.
+            PaintCellForTest(grid, 3, 4);
+            Assert.AreEqual(2, editedCount, "toggling a cell must raise Edited again");
+            Assert.IsFalse(sim.IsAlive(3, 4), "the second paint should clear the cell");
+            Assert.AreEqual(0, sim.Population);
+
+            // Out-of-range coordinates must be ignored silently, without a notification.
+            PaintCellForTest(grid, -1, 0);
+            PaintCellForTest(grid, 24, 24);
+            Assert.AreEqual(2, editedCount, "out-of-range paints must not notify");
         }
 
         [UnityTest]
-        public IEnumerator EveryPresetButton_IsVisibleAndInsideItsLibraryPanel()
+        public IEnumerator EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout()
         {
+            // Integration test: keeps the CONTROLLER'S OWN simulation and its own Edited callback.
+            // The previous version of this test bound a second simulation and overwrote grid.Edited,
+            // which replaced the very wiring it claimed to verify.
             yield return Settle();
 
             VisualElement root = GetRoot();
-            VisualElement library = FindByClass(root, "library");
-            List<Button> presets = library.Query<Button>(className: "preset").ToList();
-            Assert.AreEqual(LifePatterns.All.Length, presets.Count);
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+            LifeGridElement grid = FindByClass(root, "life-grid") as LifeGridElement;
+            Assert.IsNotNull(grid, "missing LifeGridElement");
 
-            // Non-zero size is not enough: a control can be laid out but sit outside its panel
-            // (clipped) or on top of the boundary dropdown. Check containment and stacking.
+            // Deterministic starting point: load a known pattern explicitly rather than assuming
+            // whichever specimen the previous test happened to leave selected.
+            Press(FindPreset(root, "PENTADECATHLON"));
+            yield return null;
+
+            Label population = ReadoutValue(root, "POPULATION");
+            Label state = ReadoutValue(root, "STATE");
+            Label generation = ReadoutValue(root, "GENERATION");
+
+            LifeSimulation live = ReadSimulation(controller);
+            Assert.AreSame(live, ReadBoundSimulation(grid),
+                "the grid must be bound to the controller's own simulation");
+            Assert.AreEqual(12, live.Population, "expected the pentadecathlon's 12 cells");
+            Assert.AreEqual("0012", population.text);
+
+            // Start the clock so we can prove an edit pauses it.
+            Press(FindButton(root, "▶ 运行"));
+            Assert.AreEqual("演算中", state.text, "the clock should be running");
+
+            // Edit one cell through the real element, leaving the controller's callback in place.
+            PaintCellForTest(grid, 0, 0);
+            yield return null;
+
+            Assert.IsFalse(ReadRunning(controller), "editing the board must pause the clock");
+            Assert.AreEqual("已暂停", state.text, "the state readout should report paused");
+            Assert.AreEqual("0000", generation.text, "editing should not advance the generation counter");
+            Assert.AreEqual(13, live.Population, "the edit should have added one live cell to the real board");
+            Assert.AreEqual("0013", population.text, "the population readout must reflect the real board");
+            Assert.AreEqual("自由样本 / 手动编辑", ReadSampleCaption(root),
+                "the sample caption should switch to the custom-edit label");
+
+            // Restore the interface for the tests that follow.
+            Press(FindButton(root, "↺ 重置"));
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl()
+        {
+            // The archive is a ScrollView, so off-screen entries are SUPPOSED to be clipped - an
+            // assertion that every button sits inside the panel would contradict the scroll itself.
+            // What must hold instead: the scroll viewport never covers the boundary dropdown, and
+            // every entry can be scrolled into view and is then actually selectable.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            ScrollView archive = FindByClass(root, "preset-scroll") as ScrollView;
+            Assert.IsNotNull(archive, "missing the 'preset-scroll' ScrollView");
+
             VisualElement boundary = FindByClass(root, "dropdown");
             Assert.IsNotNull(boundary, "missing the boundary-condition dropdown");
 
-            Rect panel = library.worldBound;
-            Assert.Greater(panel.height, 0f, "the library panel collapsed");
+            // The viewport must sit entirely above the dropdown (panel space: y grows downward).
+            Assert.LessOrEqual(archive.worldBound.yMax, boundary.worldBound.yMin + 0.5f,
+                "the preset scroll viewport overlaps the boundary-condition dropdown");
 
-            foreach (Button preset in presets)
+            List<Button> presets = archive.Query<Button>(className: "preset").ToList();
+            Assert.AreEqual(LifePatterns.All.Length, presets.Count,
+                "the archive should hold one button per pattern");
+
+            Label population = ReadoutValue(root, "POPULATION");
+            Rect viewport = archive.worldBound;
+
+            for (int i = 0; i < presets.Count; i++)
             {
+                Button preset = presets[i];
+
+                // A button that starts off-screen is fine; scroll it in and require it to arrive.
+                archive.scrollOffset = new Vector2(0f, Mathf.Max(0f, preset.layout.yMax - viewport.height));
+                yield return null;
+
                 Rect bounds = preset.worldBound;
-                Assert.Greater(bounds.width, 0f, $"preset '{preset.text}' has no width");
-                Assert.Greater(bounds.height, 0f, $"preset '{preset.text}' has no height");
+                Assert.GreaterOrEqual(bounds.yMin, viewport.yMin - 0.5f,
+                    $"'{preset.text}' could not be scrolled fully into the top of the viewport");
+                Assert.LessOrEqual(bounds.yMax, viewport.yMax + 0.5f,
+                    $"'{preset.text}' could not be scrolled fully into the viewport");
+                Assert.Greater(bounds.height, 0f, $"'{preset.text}' has no height");
+                Assert.Greater(bounds.width, 0f, $"'{preset.text}' has no width");
 
-                Assert.GreaterOrEqual(bounds.yMin, panel.yMin - 0.5f,
-                    $"preset '{preset.text}' is above its panel");
-                Assert.LessOrEqual(bounds.yMax, panel.yMax + 0.5f,
-                    $"preset '{preset.text}' overflows the bottom of the library panel");
+                // Scrolled into view, it must be selectable and load its own pattern.
+                Press(preset);
+                yield return null;
 
-                Assert.LessOrEqual(bounds.yMax, boundary.worldBound.yMin + 0.5f,
-                    $"preset '{preset.text}' overlaps the boundary-condition dropdown");
+                Assert.IsTrue(preset.ClassListContains("selected"),
+                    $"'{preset.text}' did not become the selected specimen after being pressed");
+                Assert.AreEqual(LifePatterns.All[i].Cells.Length.ToString("0000"), population.text,
+                    $"selecting '{preset.text}' did not load its pattern");
             }
         }
 
@@ -346,15 +409,72 @@ namespace ConwayGameOfLife.Tests
         }
 
         [UnityTest]
-        public IEnumerator Performance_MeasureTheClockInsideTheEditorRuntime()
+        public IEnumerator Clock_RunsAtTheRequestedRateAcrossRealFrames()
         {
-            // GPT's review point 5: the standalone .NET harness numbers are NOT Unity player numbers.
-            // This measures the same work inside the editor runtime, driven through the controller's
-            // own clock, so the figure is attributable to the runtime that actually ships.
-            //
-            // Scope: rule advancement plus the per-generation readout refresh. It does NOT measure
-            // the Painter2D grid repaint, which is deferred to the panel update and is not reachable
-            // from a test - the Unity Profiler is required for that (see PROJECT_LOG T2).
+            // Real elapsed time, real frames, the controller's own Update(). No SendMessage, no
+            // repeated reuse of one frame's deltaTime. The ground truth is the GENERATION COUNTER,
+            // not a stopwatch around synthetic calls.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+
+            Press(FindButton(root, "↺ 重置"));
+            yield return null;
+
+            FieldInfo speedField = typeof(LifeTerminalController).GetField(
+                "speedSlider", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(speedField, "LifeTerminalController.speedSlider field not found");
+            SliderInt speedSlider = (SliderInt)speedField.GetValue(controller);
+
+            const int requestedRate = 20; // the slider's documented maximum
+            speedSlider.value = requestedRate;
+            yield return null;
+
+            Label generation = ReadoutValue(root, "GENERATION");
+            Button play = FindButton(root, "▶ 运行");
+
+            Press(play);
+            int genAtStart = ReadGeneration(controller);
+            float start = Time.realtimeSinceStartup;
+            int startFrame = Time.frameCount;
+
+            const float window = 2.0f;
+            while (Time.realtimeSinceStartup - start < window && Time.frameCount - startFrame < 2000)
+            {
+                yield return null;
+            }
+
+            float elapsed = Time.realtimeSinceStartup - start;
+            int frames = Time.frameCount - startFrame;
+            int advanced = ReadGeneration(controller) - genAtStart;
+            Press(play); // pause before reporting
+
+            float achieved = advanced / elapsed;
+            Debug.Log($"[clock] requested={requestedRate} gen/s  advanced={advanced} generations " +
+                      $"in {elapsed:F2}s over {frames} frames  => {achieved:F1} gen/s achieved " +
+                      $"(editor PlayMode)");
+
+            Assert.Greater(frames, 10, "not enough frames elapsed to judge the clock");
+            Assert.Greater(advanced, 0, "the clock advanced no generations across real frames");
+
+            // The accumulator drives generations from unscaledDeltaTime, so the achieved rate must
+            // land near the requested rate (not below half, and never above double).
+            Assert.Greater(achieved, requestedRate * 0.5f,
+                $"the clock achieved only {achieved:F1} gen/s against a requested {requestedRate} gen/s");
+            Assert.Less(achieved, requestedRate * 2f,
+                $"the clock ran at {achieved:F1} gen/s, far above the requested {requestedRate} gen/s");
+        }
+
+        [UnityTest]
+        public IEnumerator MicroBenchmark_StepCostInsideTheEditorRuntime()
+        {
+            // EXPLICITLY A SYNTHETIC MICRO-BENCHMARK, not a picture of real gameplay:
+            //   * every call reuses the same frame's unscaledDeltaTime, and
+            //   * SendMessage adds reflection dispatch overhead per call.
+            // It is reported as a labelled micro-benchmark only, and is deliberately NOT used to
+            // characterise real-time performance. Cross-frame clock behaviour is covered by
+            // Clock_RunsAtTheRequestedRateAcrossRealFrames; grid repaint needs the Unity Profiler.
             yield return Settle();
 
             LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
@@ -364,10 +484,7 @@ namespace ConwayGameOfLife.Tests
                 "running", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.IsNotNull(runningField, "LifeTerminalController.running field not found");
 
-            const float speed = 1000f; // generations/second: as fast as the accumulator allows
-            const int steps = 2000;
-
-            // Warm up so JIT and the readout labels are not part of the measurement.
+            // Warm up.
             for (int i = 0; i < 200; i++)
             {
                 controller.SendMessage("StepOnce", SendMessageOptions.DontRequireReceiver);
@@ -375,19 +492,13 @@ namespace ConwayGameOfLife.Tests
 
             yield return null;
 
-            FieldInfo speedField = typeof(LifeTerminalController).GetField(
-                "speedSlider", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(speedField, "LifeTerminalController.speedSlider field not found");
-            SliderInt speedSlider = (SliderInt)speedField.GetValue(controller);
-            speedSlider.value = (int)speed;
-
+            const int calls = 2000;
             int genBefore = ReadGeneration(controller);
 
             runningField.SetValue(controller, true);
-
             var sw = new System.Diagnostics.Stopwatch();
             sw.Start();
-            for (int i = 0; i < steps; i++)
+            for (int i = 0; i < calls; i++)
             {
                 controller.SendMessage("Update", SendMessageOptions.DontRequireReceiver);
             }
@@ -396,23 +507,15 @@ namespace ConwayGameOfLife.Tests
             runningField.SetValue(controller, false);
 
             int advanced = ReadGeneration(controller) - genBefore;
+            Assert.Greater(advanced, 0, "the micro-benchmark advanced no generations");
 
-            double perStepMs = sw.Elapsed.TotalMilliseconds / steps;
-            double perGenerationMs = advanced > 0 ? sw.Elapsed.TotalMilliseconds / advanced : double.NaN;
-
-            Debug.Log($"[perf] editor runtime, board 96x64 (6144 cells): " +
-                      $"{steps} clock ticks advanced {advanced} generations " +
-                      $"in {sw.Elapsed.TotalMilliseconds:F1} ms " +
-                      $"({perStepMs:F4} ms/tick, {perGenerationMs:F4} ms/generation)");
-
-            Assert.Greater(advanced, 0, "the clock did not advance any generation, so nothing was measured");
-
-            // Sanity bound: the UI clock must stay far under a 60 fps frame budget (16.6 ms).
-            // Allocation is deliberately not asserted here: GC.GetTotalAllocatedBytes is unavailable
-            // in Unity's runtime and GC.GetTotalMemory is a coarse heap gauge, not an allocator, so
-            // it cannot honestly bound per-generation garbage.
-            Assert.Less(perStepMs, 8.0,
-                $"{perStepMs:F4} ms per clock tick is too slow for a 60 fps budget");
+            double msPerGeneration = sw.Elapsed.TotalMilliseconds / advanced;
+            Debug.Log($"[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. " +
+                      $"Board 96x64 = 6144 cells. {calls} synchronous Update() calls advanced {advanced} " +
+                      $"generations in {sw.Elapsed.TotalMilliseconds:F1} ms => {msPerGeneration:F4} ms/generation. " +
+                      $"Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds " +
+                      $"reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. " +
+                      $"Cite this line as the source for any per-generation figure.");
         }
 
         private static int ReadGeneration(LifeTerminalController controller)
@@ -428,6 +531,51 @@ namespace ConwayGameOfLife.Tests
         private static int ParseReadout(Label label)
         {
             return int.TryParse(label.text, out int value) ? value : -1;
+        }
+
+        /// <summary>Reads the controller's private simulation via reflection.</summary>
+        private static LifeSimulation ReadSimulation(LifeTerminalController controller)
+        {
+            FieldInfo field = typeof(LifeTerminalController).GetField(
+                "simulation", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "LifeTerminalController.simulation field not found");
+            return (LifeSimulation)field.GetValue(controller);
+        }
+
+        /// <summary>Reads the simulation a LifeGridElement is bound to, via its private field.</summary>
+        private static LifeSimulation ReadBoundSimulation(LifeGridElement grid)
+        {
+            FieldInfo field = typeof(LifeGridElement).GetField(
+                "simulation", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "LifeGridElement.simulation field not found");
+            return (LifeSimulation)field.GetValue(grid);
+        }
+
+        /// <summary>Reads the controller's private running flag via reflection.</summary>
+        private static bool ReadRunning(LifeTerminalController controller)
+        {
+            FieldInfo field = typeof(LifeTerminalController).GetField(
+                "running", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "LifeTerminalController.running field not found");
+            return (bool)field.GetValue(controller);
+        }
+
+        /// <summary>
+        /// The specimen caption currently shown in the screen bar. Several labels share the "micro"
+        /// class, so this picks the one that starts with a known caption prefix.
+        /// </summary>
+        private static string ReadSampleCaption(VisualElement root)
+        {
+            foreach (VisualElement element in root.Query<VisualElement>(className: "micro").ToList())
+            {
+                if (element is Label label &&
+                    (label.text.StartsWith("样本 ") || label.text.StartsWith("自由样本")))
+                {
+                    return label.text;
+                }
+            }
+
+            return null;
         }
 
         private static Button FindPreset(VisualElement root, string englishName)

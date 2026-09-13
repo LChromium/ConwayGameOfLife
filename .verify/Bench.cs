@@ -11,28 +11,40 @@ namespace ConwayGameOfLife.Verify
     internal static class Bench
     {
         /// <summary>
-        /// Returns 0 when every board produced a positive, finite throughput, 2 when a board died
-        /// out (which would make its numbers meaningless).
+        /// Returns 0 when the benchmark ran; 1 when a workload was invalidated (a board that died
+        /// out makes its own numbers vacuous).
+        ///
+        /// The harness-wide contract is: 0 = the command's check passed, 1 = the check failed,
+        /// 2 = usage error. A dead board is a failed measurement, not a usage error, so it must not
+        /// report 2 - that code is reserved for bad arguments.
         /// </summary>
         public static int Run()
         {
-            Console.WriteLine("LifeSimulation throughput (Release, single core)");
+            Console.WriteLine("LifeSimulation throughput micro-benchmark");
+            Console.WriteLine("  NOT a Unity player measurement: this is a standalone .NET run of the");
+            Console.WriteLine("  rule engine only. Board composition and generations are reported so the");
+            Console.WriteLine("  workload is reproducible and interpretable.");
+            Console.WriteLine();
             Console.WriteLine($"{"board",-14}{"wrap",-8}{"gens",-9}{"total ms",-11}{"ms/gen",-11}{"cells/s",-16}{"gens/s"}");
 
-            int diedOut = 0;
+            int invalid = 0;
 
             foreach ((int W, int H) in new[] { (96, 64), (256, 256), (512, 512), (1024, 1024) })
             {
                 foreach (bool wrap in new[] { false, true })
                 {
-                    diedOut += Measure(W, H, wrap);
+                    invalid += Measure(W, H, wrap);
                 }
             }
 
             Console.WriteLine();
-            Console.WriteLine("Rule-application floor: one Step() performs W*H cell updates,");
-            Console.WriteLine("each reading 8 neighbours, so cells/s is the comparable figure.");
-            return diedOut == 0 ? 0 : 2;
+            Console.WriteLine("Workload: initial board from Randomize(p=0.28, seed=99), so every board is");
+            Console.WriteLine("reproducible. Life is chaotic, so density drifts during a run; the figures are");
+            Console.WriteLine("for the whole run, not a steady-state density.");
+            Console.WriteLine("Rule-application floor: one Step() performs W*H cell updates, each reading 8");
+            Console.WriteLine("neighbours, so cells/s is the comparable figure.");
+
+            return invalid == 0 ? 0 : 1;
         }
 
         private static int Measure(int width, int height, bool wrap)
@@ -64,10 +76,10 @@ namespace ConwayGameOfLife.Verify
             Console.WriteLine($"{$"{width}x{height}",-14}{(wrap ? "yes" : "no"),-8}{generations,-9}" +
                               $"{totalMs,-11:F1}{msPerGen,-11:F4}{cellsPerSecond,-16:F0}{gensPerSecond:F1}");
 
-            // Keep the population realistic so later runs are not measuring an empty board.
+            // A board that died out makes its own throughput figure vacuous.
             if (sim.Population == 0)
             {
-                Console.WriteLine("      (warning: board died out - these numbers are meaningless)");
+                Console.WriteLine("      (invalid: board died out - these numbers are meaningless)");
                 return 1;
             }
 
