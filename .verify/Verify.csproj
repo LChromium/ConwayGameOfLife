@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Verify</AssemblyName>
+    <RootNamespace>ConwayGameOfLife.Verify</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Link the real project sources so this harness exercises the shipped logic. -->
+    <Compile Include="..\Assets\Scripts\LifeSimulation.cs" />
+    <Compile Include="..\Assets\Scripts\LifePatterns.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="Probe.cs" />
+    <Compile Include="Search.cs" />
+    <Compile Include="RuleCheck.cs" />
+    <Compile Include="Rle.cs" />
+    <Compile Include="Bench.cs" />
+    <Compile Include="Diagnose.cs" />
+  </ItemGroup>
+
+</Project>
+
+
+
