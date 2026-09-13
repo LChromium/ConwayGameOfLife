@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-run id="2" testcasecount="23" result="Passed" total="23" passed="23" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.1021496">
+  <test-suite type="TestSuite" id="1000" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="23" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.102150" total="23" passed="23" failed="0" inconclusive="0" skipped="0" asserts="0">
+    <properties>
+      <property name="platform" value="EditMode" />
+    </properties>
+    <test-suite type="Assembly" id="1026" name="ConwayGameOfLife.Tests.EditMode.dll" fullname="C:/Users/12542/ConwayGameOfLife/Library/ScriptAssemblies/ConwayGameOfLife.Tests.EditMode.dll" runstate="Runnable" testcasecount="23" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.096605" total="23" passed="23" failed="0" inconclusive="0" skipped="0" asserts="0">
+      <properties>
+        <property name="_PID" value="39940" />
+        <property name="_APPDOMAIN" value="Unity Child Domain" />
+        <property name="platform" value="EditMode" />
+        <property name="EditorOnly" value="True" />
+      </properties>
+      <test-suite type="TestSuite" id="1027" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="23" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.096214" total="23" passed="23" failed="0" inconclusive="0" skipped="0" asserts="0">
+        <properties />
+        <test-suite type="TestSuite" id="1028" name="Tests" fullname="ConwayGameOfLife.Tests" runstate="Runnable" testcasecount="23" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.095878" total="23" passed="23" failed="0" inconclusive="0" skipped="0" asserts="0">
+          <properties />
+          <test-suite type="TestFixture" id="1001" name="LifePatternTests" fullname="ConwayGameOfLife.Tests.LifePatternTests" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" testcasecount="10" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.043172" total="10" passed="10" failed="0" inconclusive="0" skipped="0" asserts="0">
+            <properties />
+            <test-case id="1002" name="Archive_CoversEveryRequiredCategory" fullname="ConwayGameOfLife.Tests.LifePatternTests.Archive_CoversEveryRequiredCategory" methodname="Archive_CoversEveryRequiredCategory" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="937667087" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.008834" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1003" name="Archive_HasUniqueEnglishNames" fullname="ConwayGameOfLife.Tests.LifePatternTests.Archive_HasUniqueEnglishNames" methodname="Archive_HasUniqueEnglishNames" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="1457889587" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000403" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1004" name="EveryPattern_HasCellsAndConsistentPeriod" fullname="ConwayGameOfLife.Tests.LifePatternTests.EveryPattern_HasCellsAndConsistentPeriod" methodname="EveryPattern_HasCellsAndConsistentPeriod" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="241767168" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.003051" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1010" name="Glider_TravelsOneCellDiagonallyPerPeriod" fullname="ConwayGameOfLife.Tests.LifePatternTests.Glider_TravelsOneCellDiagonallyPerPeriod" methodname="Glider_TravelsOneCellDiagonallyPerPeriod" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="1348033925" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.001186" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1006" name="Oscillators_ReturnToTheirExactShapeAfterTheirPeriod" fullname="ConwayGameOfLife.Tests.LifePatternTests.Oscillators_ReturnToTheirExactShapeAfterTheirPeriod" methodname="Oscillators_ReturnToTheirExactShapeAfterTheirPeriod" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="1870713656" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.001893" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1007" name="PeriodicOscillators_ReturnToTheirExactShapeAfterTheirPeriod" fullname="ConwayGameOfLife.Tests.LifePatternTests.PeriodicOscillators_ReturnToTheirExactShapeAfterTheirPeriod" methodname="PeriodicOscillators_ReturnToTheirExactShapeAfterTheirPeriod" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="1643851998" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.003723" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1008" name="PeriodicOscillators_StayInPlace" fullname="ConwayGameOfLife.Tests.LifePatternTests.PeriodicOscillators_StayInPlace" methodname="PeriodicOscillators_StayInPlace" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="211597585" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.007995" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1011" name="Pulsar_HasExactlyFortyEightCellsAndPeriodThree" fullname="ConwayGameOfLife.Tests.LifePatternTests.Pulsar_HasExactlyFortyEightCellsAndPeriodThree" methodname="Pulsar_HasExactlyFortyEightCellsAndPeriodThree" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="43795350" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000634" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1009" name="Spaceships_TranslateByAWholeOffsetEveryPeriod" fullname="ConwayGameOfLife.Tests.LifePatternTests.Spaceships_TranslateByAWholeOffsetEveryPeriod" methodname="Spaceships_TranslateByAWholeOffsetEveryPeriod" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="271365495" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.001893" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1005" name="StillLifes_AreCompletelyUnchangedByEveryGeneration" fullname="ConwayGameOfLife.Tests.LifePatternTests.StillLifes_AreCompletelyUnchangedByEveryGeneration" methodname="StillLifes_AreCompletelyUnchangedByEveryGeneration" classname="ConwayGameOfLife.Tests.LifePatternTests" runstate="Runnable" seed="778080000" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.002338" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+          </test-suite>
+          <test-suite type="TestFixture" id="1012" name="LifeSimulationTests" fullname="ConwayGameOfLife.Tests.LifeSimulationTests" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.051372" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+            <properties />
+            <test-case id="1022" name="Clear_ResetsBoardGenerationAndPopulation" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Clear_ResetsBoardGenerationAndPopulation" methodname="Clear_ResetsBoardGenerationAndPopulation" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="242141199" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000389" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1013" name="Constructor_RejectsNonPositiveDimensions" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Constructor_RejectsNonPositiveDimensions" methodname="Constructor_RejectsNonPositiveDimensions" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="918659258" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.004070" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1023" name="LoadCentered_CentersThePatternAndResetsState" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.LoadCentered_CentersThePatternAndResetsState" methodname="LoadCentered_CentersThePatternAndResetsState" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="1100471172" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000788" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1014" name="NewSimulation_StartsEmptyAtGenerationZero" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.NewSimulation_StartsEmptyAtGenerationZero" methodname="NewSimulation_StartsEmptyAtGenerationZero" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="114103097" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000117" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1025" name="Randomize_RejectsNullRandom" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Randomize_RejectsNullRandom" methodname="Randomize_RejectsNullRandom" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="673977924" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000267" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1024" name="Randomize_RespectsProbabilityBoundsAndTracksPopulation" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Randomize_RespectsProbabilityBoundsAndTracksPopulation" methodname="Randomize_RespectsProbabilityBoundsAndTracksPopulation" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="565952472" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000403" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1021" name="SetCell_TracksPopulationAndIgnoresOutOfBounds" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.SetCell_TracksPopulationAndIgnoresOutOfBounds" methodname="SetCell_TracksPopulationAndIgnoresOutOfBounds" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="1469821928" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000208" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1017" name="Step_BlinkerOscillatesWithPeriodTwo" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Step_BlinkerOscillatesWithPeriodTwo" methodname="Step_BlinkerOscillatesWithPeriodTwo" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="906944031" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000170" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1015" name="Step_ImplementsBirthRule_DeadCellWithExactlyThreeNeighboursLives" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Step_ImplementsBirthRule_DeadCellWithExactlyThreeNeighboursLives" methodname="Step_ImplementsBirthRule_DeadCellWithExactlyThreeNeighboursLives" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="1469159045" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000134" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1016" name="Step_ImplementsSurvivalRule_IgnoresOvercrowdingAndLoneliness" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Step_ImplementsSurvivalRule_IgnoresOvercrowdingAndLoneliness" methodname="Step_ImplementsSurvivalRule_IgnoresOvercrowdingAndLoneliness" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="22063726" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000178" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1018" name="Step_MatchesIndependentReferenceOnRandomBoards" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Step_MatchesIndependentReferenceOnRandomBoards" methodname="Step_MatchesIndependentReferenceOnRandomBoards" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="615489477" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.019087" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1019" name="Step_WithWrapEdges_MatchesIndependentReferenceOnRandomBoards" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.Step_WithWrapEdges_MatchesIndependentReferenceOnRandomBoards" methodname="Step_WithWrapEdges_MatchesIndependentReferenceOnRandomBoards" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="418017670" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.022012" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+            </test-case>
+            <test-case id="1020" name="WrapEdges_ProducesDifferentResultFromFixedBoundary" fullname="ConwayGameOfLife.Tests.LifeSimulationTests.WrapEdges_ProducesDifferentResultFromFixedBoundary" methodname="WrapEdges_ProducesDifferentResultFromFixedBoundary" classname="ConwayGameOfLife.Tests.LifeSimulationTests" runstate="Runnable" seed="1185780812" result="Passed" start-time="2026-09-13 04:07:17Z" end-time="2026-09-13 04:07:17Z" duration="0.000233" asserts="0">
+              <properties>
+                <property name="retryIteration" value="0" />
+                <property name="repeatIteration" value="0" />
+              </properties>
+              <output><![CDATA[Saving results to: C:/Users/12542/AppData/LocalLow/DefaultCompany/ConwayGameOfLife\TestResults.xml
+Saving results to: C:/Users/12542/AppData/LocalLow/DefaultCompany/ConwayGameOfLife\TestResults.xml
+]]></output>
+            </test-case>
+          </test-suite>
+        </test-suite>
+      </test-suite>
+    </test-suite>
+  </test-suite>
+</test-run>
