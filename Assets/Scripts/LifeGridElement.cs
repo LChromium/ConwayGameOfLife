@@ -128,6 +128,29 @@ namespace ConwayGameOfLife
             Edited?.Invoke();
         }
 
+        /// <summary>
+        /// Paints a cell as if the user had clicked it, using the same code path as a real edit.
+        ///
+        /// Exists because UI Toolkit pointer events cannot be synthesized from a test assembly:
+        /// PointerEventBase's position/button setters are internal, and GetPooled's overloads are
+        /// internal too. Without this seam the edit->controller wiring would be untestable.
+        /// </summary>
+        internal void PaintForTest(int x, int y)
+        {
+            if (simulation == null || !IsInside(x, y))
+                return;
+
+            paintValue = !simulation.IsAlive(x, y);
+            Paint(x, y);
+        }
+
+        private bool IsInside(int x, int y)
+        {
+            return simulation != null
+                   && x >= 0 && x < simulation.Width
+                   && y >= 0 && y < simulation.Height;
+        }
+
         private bool TryGetCell(Vector2 position, out int x, out int y)
         {
             x = 0;

@@ -11,7 +11,8 @@ namespace ConwayGameOfLife.Verify
     /// </summary>
     internal static class RuleCheck
     {
-        public static void Run()
+        /// <summary>Returns 0 when every rule check passed, 1 otherwise.</summary>
+        public static int Run()
         {
             int failures = 0;
             failures += CheckBlinker();
@@ -19,6 +20,7 @@ namespace ConwayGameOfLife.Verify
             failures += CheckWrapEdgesAgainstReference();
 
             Console.WriteLine(failures == 0 ? "ENGINE: rules verified." : $"ENGINE: {failures} FAILURE(S).");
+            return failures == 0 ? 0 : 1;
         }
 
         private static int CheckBlinker()

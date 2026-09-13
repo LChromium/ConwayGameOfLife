@@ -10,25 +10,32 @@ namespace ConwayGameOfLife.Verify
     /// </summary>
     internal static class Bench
     {
-        public static void Run()
+        /// <summary>
+        /// Returns 0 when every board produced a positive, finite throughput, 2 when a board died
+        /// out (which would make its numbers meaningless).
+        /// </summary>
+        public static int Run()
         {
             Console.WriteLine("LifeSimulation throughput (Release, single core)");
             Console.WriteLine($"{"board",-14}{"wrap",-8}{"gens",-9}{"total ms",-11}{"ms/gen",-11}{"cells/s",-16}{"gens/s"}");
+
+            int diedOut = 0;
 
             foreach ((int W, int H) in new[] { (96, 64), (256, 256), (512, 512), (1024, 1024) })
             {
                 foreach (bool wrap in new[] { false, true })
                 {
-                    Measure(W, H, wrap);
+                    diedOut += Measure(W, H, wrap);
                 }
             }
 
             Console.WriteLine();
             Console.WriteLine("Rule-application floor: one Step() performs W*H cell updates,");
             Console.WriteLine("each reading 8 neighbours, so cells/s is the comparable figure.");
+            return diedOut == 0 ? 0 : 2;
         }
 
-        private static void Measure(int width, int height, bool wrap)
+        private static int Measure(int width, int height, bool wrap)
         {
             var sim = new LifeSimulation(width, height) { WrapEdges = wrap };
             sim.Randomize(0.28f, new Random(99));
@@ -60,8 +67,11 @@ namespace ConwayGameOfLife.Verify
             // Keep the population realistic so later runs are not measuring an empty board.
             if (sim.Population == 0)
             {
-                Console.WriteLine("      (warning: board died out)");
+                Console.WriteLine("      (warning: board died out - these numbers are meaningless)");
+                return 1;
             }
+
+            return 0;
         }
     }
 }

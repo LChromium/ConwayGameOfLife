@@ -7,18 +7,27 @@
 ## 1. 模块划分
 
 ```
-ConwayGameOfLife.Runtime (Assembly Definition)
+ConwayGameOfLife.Runtime (Assembly Definition, 允许引用 UnityEngine)
 ├── LifeSimulation.cs          规则引擎 — 纯 C#，零 UnityEngine 依赖
-├── LifePatterns.cs            样本数据与分类
+├── LifePatterns.cs            样本数据与分类 — 同样零 UnityEngine 依赖
 ├── LifeGridElement.cs         网格渲染与鼠标编辑 (VisualElement)
 └── LifeTerminalController.cs  界面装配、演化驱动、状态同步
 
 ConwayGameOfLife.Tests.EditMode (Assembly Definition, 仅编辑器)
 ├── LifeSimulationTests.cs     规则、边界、簿记
 └── LifePatternTests.cs        每个样本的行为断言
+
+ConwayGameOfLife.Tests.PlayMode (Assembly Definition)
+└── LifeTerminalBootstrapTests.cs  界面自举、交互、布局适配、运行时性能采样
 ```
 
-**唯一的强约束**：`LifeSimulation` 与 `LifePatterns` 不得引用 `UnityEngine`。这条约束让规则引擎可以在 Unity 之外被测试和基准测量，是 `.verify/` 工具能存在的前提。程序集定义文件把这个边界固化了下来。
+**关于"纯 C#"这条边界，需要准确地说明它由什么保证：**
+
+- **它是一条源码级约定，不是程序集级的强制隔离。** `ConwayGameOfLife.Runtime` 这一个程序集同时包含规则代码和 UI 代码，因此它**确实引用 `UnityEngine`**（`LifeGridElement` 继承 `VisualElement`）。程序集定义**没有**、也无法阻止 `LifeSimulation.cs` 去 `using UnityEngine`。
+- **真正的保证来自 `.verify/` 工具**：那个 .NET 工程直接链接 `LifeSimulation.cs` 与 `LifePatterns.cs` 两份源码，在**没有 UnityEngine 程序集**的环境下编译。只要这两个文件里出现任何 `UnityEngine` 引用，`.verify` 立刻编译失败。
+- 也就是说：**跨平台可测试性是被持续验证的**（每次跑 `.verify` 都在验证），而"程序集层面强制隔离"这个说法是**不成立**的，本文档此前对它的表述过度了。
+
+若要把这条边界提升为程序集级强制，正确做法是拆出第三个程序集（例如 `ConwayGameOfLife.Core`，只含规则与样本、`noEngineReferences: true`），再由 Runtime 引用它。当前没有这么做，因为两个文件的规模还不足以承担额外的程序集开销。
 
 ---
 

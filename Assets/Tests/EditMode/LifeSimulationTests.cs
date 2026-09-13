@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using NUnit.Framework;
 
@@ -347,6 +348,47 @@ namespace ConwayGameOfLife.Tests
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>Live cells in a stable order (row-major), for exact shape comparisons.</summary>
+        internal static List<(int X, int Y)> AliveCells(LifeSimulation sim)
+        {
+            var cells = new List<(int X, int Y)>();
+            for (int y = 0; y < sim.Height; y++)
+            {
+                for (int x = 0; x < sim.Width; x++)
+                {
+                    if (sim.IsAlive(x, y))
+                    {
+                        cells.Add((x, y));
+                    }
+                }
+            }
+
+            return cells;
+        }
+
+        /// <summary>
+        /// Asserts that <paramref name="actual"/> is exactly <paramref name="expected"/> translated
+        /// by (dx, dy) - i.e. the same shape moved, not merely a similar one.
+        /// </summary>
+        internal static void AssertSameCells(
+            List<(int X, int Y)> expected,
+            List<(int X, int Y)> actual,
+            int dx,
+            int dy,
+            string label)
+        {
+            Assert.AreEqual(expected.Count, actual.Count,
+                $"{label}: live-cell count changed (expected {expected.Count}, got {actual.Count})");
+
+            var actualSet = new HashSet<(int X, int Y)>(actual);
+            foreach ((int x, int y) in expected)
+            {
+                var moved = (X: x + dx, Y: y + dy);
+                Assert.IsTrue(actualSet.Contains(moved),
+                    $"{label}: cell ({x},{y}) shifted by ({dx},{dy}) should land on ({moved.X},{moved.Y}), but that cell is dead");
+            }
         }
 
         /// <summary>

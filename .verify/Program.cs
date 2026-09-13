@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using ConwayGameOfLife;
 
@@ -16,34 +17,29 @@ namespace ConwayGameOfLife.Verify
 
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && args[0] == "probe")
+            // Every verification subcommand must propagate its verdict to the process exit code,
+            // otherwise an automated pipeline reads "failure printed" as success.
+            if (args.Length > 0)
             {
-                Probe.Run();
-                return 0;
-            }
-
-            if (args.Length > 0 && args[0] == "search")
-            {
-                Search.Run();
-                return 0;
-            }
-
-            if (args.Length > 0 && args[0] == "diagnose")
-            {
-                Diagnose.Run();
-                return 0;
-            }
-
-            if (args.Length > 0 && args[0] == "bench")
-            {
-                Bench.Run();
-                return 0;
-            }
-
-            if (args.Length > 0 && args[0] == "rules")
-            {
-                RuleCheck.Run();
-                return 0;
+                switch (args[0])
+                {
+                    case "probe":
+                        return Probe.Run();
+                    case "search":
+                        return Search.Run();
+                    case "diagnose":
+                        return Diagnose.Run();
+                    case "bench":
+                        return Bench.Run();
+                    case "rules":
+                        return RuleCheck.Run();
+                    case "selftest":
+                        return SelfTest();
+                    default:
+                        Console.Error.WriteLine($"unknown subcommand '{args[0]}'");
+                        Console.Error.WriteLine("usage: Verify [probe|search|diagnose|bench|rules|selftest]");
+                        return 2;
+                }
             }
 
             bool allOk = true;
@@ -57,6 +53,89 @@ namespace ConwayGameOfLife.Verify
             Console.WriteLine();
             Console.WriteLine(allOk ? "RESULT: all patterns behave as declared." : "RESULT: MISMATCHES FOUND.");
             return allOk ? 0 : 1;
+        }
+
+        /// <summary>
+        /// Falsification test for this harness itself.
+        ///
+        /// A verifier that cannot fail is worthless: if Analyze() always reported OK, the main
+        /// run would still exit 0 and every "verified" claim in the docs would be vacuous. This
+        /// deliberately feeds Analyze() wrong declarations and REQUIRES it to report failure.
+        ///
+        /// Returns 0 when the checker correctly rejects every lie, 1 when it fails to notice one.
+        /// </summary>
+        private static int SelfTest()
+        {
+            Console.WriteLine("Harness self-test: the checker must reject false claims.");
+
+            int notRejected = 0;
+
+            notRejected += ExpectRejected("BLOCK declared as period-2 oscillator",
+                "BLOCK", LifePatternKind.Oscillator, 2);
+
+            notRejected += ExpectRejected("BLINKER declared as a still life",
+                "BLINKER", LifePatternKind.StillLife, 1);
+
+            notRejected += ExpectRejected("PULSAR declared with the wrong period",
+                "PULSAR", LifePatternKind.PeriodicOscillator, 7);
+
+            notRejected += ExpectRejected("GLIDER declared as a non-moving oscillator",
+                "GLIDER", LifePatternKind.Oscillator, 4);
+
+            notRejected += ExpectRejected("BEEHIVE declared as a period-3 oscillator",
+                "BEEHIVE", LifePatternKind.PeriodicOscillator, 3);
+
+            Console.WriteLine();
+            if (notRejected == 0)
+            {
+                Console.WriteLine("SELFTEST: all false claims were correctly rejected.");
+                return 0;
+            }
+
+            Console.WriteLine($"SELFTEST: FAILED - {notRejected} false claim(s) were accepted.");
+            return 1;
+        }
+
+        /// <summary>Runs the checker against a deliberately wrong declaration.</summary>
+        private static int ExpectRejected(string label, string patternName, LifePatternKind wrongKind, int wrongPeriod)
+        {
+            LifePattern pattern = null;
+            foreach (LifePattern candidate in LifePatterns.All)
+            {
+                if (candidate.EnglishName == patternName)
+                {
+                    pattern = candidate;
+                    break;
+                }
+            }
+
+            if (pattern == null)
+            {
+                Console.WriteLine($"  [ERROR] {label}: pattern '{patternName}' not found");
+                return 1;
+            }
+
+            // Capture the checker's verdict without letting its output clutter the report.
+            TextWriter realOut = Console.Out;
+            bool checkerSaidOk;
+            try
+            {
+                Console.SetOut(TextWriter.Null);
+                checkerSaidOk = Analyze(patternName, wrongKind, wrongPeriod, pattern.Cells);
+            }
+            finally
+            {
+                Console.SetOut(realOut);
+            }
+
+            if (checkerSaidOk)
+            {
+                Console.WriteLine($"  [LEAK] {label} -> checker WRONGLY accepted it");
+                return 1;
+            }
+
+            Console.WriteLine($"  [ok]   {label} -> correctly rejected");
+            return 0;
         }
 
         private static bool Report(LifePattern pattern)

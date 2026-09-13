@@ -116,6 +116,11 @@ namespace ConwayGameOfLife
             VisualElement library = Element("library");
             library.Add(Label("样本档案", "section-title"));
             library.Add(Label($"SPECIMEN ARCHIVE / {LifePatterns.All.Length:00} ENTRIES", "archive-note"));
+
+            // The archive is the only region that cannot shrink arbitrarily; scrolling it keeps
+            // the machine inside the reference height so the controls are never clipped.
+            ScrollView archive = new(ScrollViewMode.Vertical) { verticalScrollerVisibility = ScrollerVisibility.Auto };
+            archive.AddToClassList("preset-scroll");
             presetButtons = new Button[LifePatterns.All.Length];
             for (int i = 0; i < LifePatterns.All.Length; i++)
             {
@@ -124,9 +129,11 @@ namespace ConwayGameOfLife
                 Button button = new(() => LoadPattern(index));
                 button.AddToClassList("preset");
                 button.text = $"{pattern.Name}\n{KindName(pattern)}";
-                library.Add(button);
+                archive.Add(button);
                 presetButtons[i] = button;
             }
+
+            library.Add(archive);
 
             library.Add(Label("边界条件", "field-label"));
             DropdownField boundary = new(new List<string> { "固定边界", "环绕边界" }, "固定边界");

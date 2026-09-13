@@ -14,8 +14,13 @@ namespace ConwayGameOfLife.Verify
         private const int Grid = 48;
         private const int TargetPeriod = 15;
 
-        public static void Run()
+        /// <summary>
+        /// Returns 0 if at least one period-15 configuration was found in the search window,
+        /// 1 otherwise. (An empty result is a real negative finding, not a crash.)
+        /// </summary>
+        public static int Run()
         {
+            int found = 0;
             var line = new List<LifeCell>();
             for (int y = 0; y < 10; y++)
             {
@@ -53,6 +58,7 @@ namespace ConwayGameOfLife.Verify
                     Bump(histogram, p2);
                     if (p2 == TargetPeriod)
                     {
+                        found++;
                         Console.WriteLine(Describe(new List<LifeCell>(line) { candidates[i], candidates[j] }, p2));
                     }
                 }
@@ -65,6 +71,8 @@ namespace ConwayGameOfLife.Verify
 
             // Baseline line only, plus the rest of the shipped set, are reported by the main harness.
             Console.WriteLine($"baseline line period: {Period(line)}");
+            Console.WriteLine($"period-{TargetPeriod} configurations found: {found}");
+            return found > 0 ? 0 : 1;
         }
 
         private static void Bump(SortedDictionary<int, int> histogram, int period)

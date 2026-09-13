@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using NUnit.Framework;
 
 namespace ConwayGameOfLife.Tests
@@ -166,41 +167,38 @@ namespace ConwayGameOfLife.Tests
         }
 
         [Test]
-        public void PeriodicOscillators_StayInPlace()
+        public void EveryNonStillLife_DoesNotRepeatBeforeItsDeclaredPeriod()
         {
+            // "Period N" means the state is identical at generation N and at no earlier generation.
+            // Without this, a pattern that never changes could satisfy a loose "returns after N" check.
             foreach (LifePattern pattern in LifePatterns.All)
             {
-                if (pattern.Kind != LifePatternKind.PeriodicOscillator)
+                if (pattern.Kind == LifePatternKind.StillLife || pattern.Kind == LifePatternKind.Spaceship)
                 {
                     continue;
                 }
 
                 LifeSimulation sim = Load(pattern);
-                BoundingBox(sim, out int minX, out int minY, out int maxX, out int maxY);
-                int centerX = minX + maxX;
-                int centerY = minY + maxY;
+                string initial = LifeSimulationTests.Snapshot(sim);
 
-                // Every generation must keep the same bounding-box centre and stay populated.
-                // A spaceship would drift the centre by a whole cell; an oscillator must not.
-                for (int generation = 1; generation <= pattern.Period * 2; generation++)
+                for (int generation = 1; generation < pattern.Period; generation++)
                 {
                     sim.Step();
-                    BoundingBox(sim, out int x, out int y, out int x2, out int y2);
-
-                    Assert.AreEqual(centerX, x + x2,
-                        $"{pattern.EnglishName} drifted horizontally at generation {generation}");
-                    Assert.AreEqual(centerY, y + y2,
-                        $"{pattern.EnglishName} drifted vertically at generation {generation}");
-                    Assert.Greater(sim.Population, 0,
-                        $"{pattern.EnglishName} died out at generation {generation}");
+                    Assert.AreNotEqual(initial, LifeSimulationTests.Snapshot(sim),
+                        $"{pattern.EnglishName} matched its initial state too early, at generation {generation}");
                 }
+
+                sim.Step();
+                Assert.AreEqual(initial, LifeSimulationTests.Snapshot(sim),
+                    $"{pattern.EnglishName} must return to its initial state after exactly {pattern.Period} generations");
             }
         }
 
         [Test]
-        public void Spaceships_TranslateByAWholeOffsetEveryPeriod()
+        public void Spaceships_TranslateTheirWholeShapeByAConsistentOffset()
         {
             int checkedCount = 0;
+
             foreach (LifePattern pattern in LifePatterns.All)
             {
                 if (pattern.Kind != LifePatternKind.Spaceship)
@@ -210,22 +208,37 @@ namespace ConwayGameOfLife.Tests
 
                 LifeSimulation sim = Load(pattern);
                 int initialPopulation = sim.Population;
-                BoundingBox(sim, out int minX, out int minY, out _, out _);
+                List<(int X, int Y)> initial = LifeSimulationTests.AliveCells(sim);
 
                 for (int i = 0; i < pattern.Period; i++)
                 {
                     sim.Step();
                 }
 
+                // The complete set of live cells must have moved by one single offset. Comparing the
+                // full set (not just the bounding box) rejects a pattern that merely changes shape.
                 Assert.AreEqual(initialPopulation, sim.Population,
                     $"{pattern.EnglishName} should keep its cell count while travelling");
 
-                BoundingBox(sim, out int minX2, out int minY2, out _, out _);
-                int dx = minX2 - minX;
-                int dy = minY2 - minY;
+                List<(int X, int Y)> after = LifeSimulationTests.AliveCells(sim);
+                Assert.AreEqual(initial.Count, after.Count,
+                    $"{pattern.EnglishName} changed its live-cell count");
 
+                int dx = after[0].X - initial[0].X;
+                int dy = after[0].Y - initial[0].Y;
                 Assert.AreNotEqual(0, Math.Abs(dx) + Math.Abs(dy),
                     $"{pattern.EnglishName} did not move, so it is not a spaceship");
+
+                LifeSimulationTests.AssertSameCells(initial, after, dx, dy, pattern.EnglishName);
+
+                // Every period afterwards must repeat the same displacement.
+                for (int i = 0; i < pattern.Period; i++)
+                {
+                    sim.Step();
+                }
+
+                LifeSimulationTests.AssertSameCells(initial, LifeSimulationTests.AliveCells(sim), dx * 2, dy * 2,
+                    pattern.EnglishName);
 
                 checkedCount++;
             }
@@ -234,20 +247,48 @@ namespace ConwayGameOfLife.Tests
         }
 
         [Test]
+        public void Spaceships_DoNotRepeatInPlaceAtAnySmallerPeriod()
+        {
+            // A spaceship returns to its own shape only after translating; it must never return to
+            // the identical absolute position at a period shorter than the declared one.
+            foreach (LifePattern pattern in LifePatterns.All)
+            {
+                if (pattern.Kind != LifePatternKind.Spaceship)
+                {
+                    continue;
+                }
+
+                LifeSimulation sim = Load(pattern);
+                string initial = LifeSimulationTests.Snapshot(sim);
+
+                for (int generation = 1; generation < pattern.Period; generation++)
+                {
+                    sim.Step();
+                    Assert.AreNotEqual(initial, LifeSimulationTests.Snapshot(sim),
+                        $"{pattern.EnglishName} returned to its exact starting position at generation {generation}");
+                }
+            }
+        }
+
+        [Test]
         public void Glider_TravelsOneCellDiagonallyPerPeriod()
         {
             LifePattern glider = LifeSimulationTests.FindPattern("GLIDER");
             LifeSimulation sim = Load(glider);
-            BoundingBox(sim, out int minX, out int minY, out _, out _);
+            List<(int X, int Y)> initial = LifeSimulationTests.AliveCells(sim);
 
             for (int i = 0; i < glider.Period; i++)
             {
                 sim.Step();
             }
 
-            BoundingBox(sim, out int minX2, out int minY2, out _, out _);
-            Assert.AreEqual(1, minX2 - minX, "glider drifts one cell horizontally per period");
-            Assert.AreEqual(1, minY2 - minY, "glider drifts one cell vertically per period");
+            List<(int X, int Y)> after = LifeSimulationTests.AliveCells(sim);
+            int dx = after[0].X - initial[0].X;
+            int dy = after[0].Y - initial[0].Y;
+
+            Assert.AreEqual(1, dx, "glider drifts one cell horizontally per period");
+            Assert.AreEqual(1, dy, "glider drifts one cell vertically per period");
+            LifeSimulationTests.AssertSameCells(initial, after, dx, dy, glider.EnglishName);
         }
 
         [Test]
@@ -276,30 +317,6 @@ namespace ConwayGameOfLife.Tests
             var sim = new LifeSimulation(BoardWidth, BoardHeight);
             sim.LoadCentered(pattern.Cells);
             return sim;
-        }
-
-        private static void BoundingBox(LifeSimulation sim, out int minX, out int minY, out int maxX, out int maxY)
-        {
-            minX = int.MaxValue;
-            minY = int.MaxValue;
-            maxX = int.MinValue;
-            maxY = int.MinValue;
-
-            for (int y = 0; y < sim.Height; y++)
-            {
-                for (int x = 0; x < sim.Width; x++)
-                {
-                    if (!sim.IsAlive(x, y))
-                    {
-                        continue;
-                    }
-
-                    minX = Math.Min(minX, x);
-                    maxX = Math.Max(maxX, x);
-                    minY = Math.Min(minY, y);
-                    maxY = Math.Max(maxY, y);
-                }
-            }
         }
     }
 }

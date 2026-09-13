@@ -25,13 +25,16 @@ namespace ConwayGameOfLife.Verify
             "x = 10, y = 3, rule = B3/S23\n" +
             "2bo4bo2b$2ob4ob2o$2bo4bo!";
 
-        public static void Run()
+        /// <summary>Returns 0 when all decoded patterns match their expected period, 1 otherwise.</summary>
+        public static int Run()
         {
-            ProbeRle("PULSAR", PulsarRle, 3);
-            ProbeRle("PENTADECATHLON", PentadecathlonRle, 15);
+            int failures = 0;
+            failures += ProbeRle("PULSAR", PulsarRle, 3);
+            failures += ProbeRle("PENTADECATHLON", PentadecathlonRle, 15);
+            return failures == 0 ? 0 : 1;
         }
 
-        private static void ProbeRle(string name, string rle, int expectedPeriod)
+        private static int ProbeRle(string name, string rle, int expectedPeriod)
         {
             List<(int X, int Y)> decoded = Rle.Decode(rle);
             var cells = new LifeCell[decoded.Count];
@@ -72,6 +75,7 @@ namespace ConwayGameOfLife.Verify
             Console.WriteLine($"       C# cells:");
             Console.WriteLine($"            {Rle.ToCSharp(decoded, 12)}");
             Console.WriteLine();
+            return ok ? 0 : 1;
         }
 
         private static string Snapshot(LifeSimulation sim)

@@ -12,53 +12,74 @@
     flex-grow: 1;
     background-color: var(--background);
     color: var(--paper);
-    padding: 24px 32px 20px;
+    padding: 18px 32px 14px;
 }
 
 .header, .top-line, .screen-bar, .readouts, .controls, .footer, .workspace {
     flex-direction: row;
 }
 
-.header { height: 72px; align-items: center; justify-content: space-between; }
+.header { height: 64px; flex-shrink: 0; align-items: center; justify-content: space-between; }
 .title { font-size: 22px; color: rgb(225, 225, 205); }
 .serial, .micro, .archive-note, .field-label, .readout-caption, .footer-text { font-size: 10px; }
 .serial { color: rgb(155, 164, 155); margin-top: 4px; }
 .status { color: var(--mint); font-size: 11px; }
 
+/* 300px is derived from the vertical budget, not guessed:
+     reference height 900
+       - app padding (18 + 14)           =  32
+       - header 64 + footer 36           = 100
+       - machine borders (2 + 9)         =  11
+     => machine may occupy at most 778px.
+   Its floor must stay under the *visible* panel height on a 1280x720 window (854px), which
+   leaves 854 - 100 - 32 - 11 = 711px of slack; 300px keeps ~400px of headroom for the footer. */
 .machine {
     flex-grow: 1;
-    min-height: 620px;
+    flex-shrink: 1;
+    min-height: 300px;
     background-color: var(--metal);
     border-width: 2px 2px 9px 2px;
     border-color: rgb(141, 147, 136) rgb(141, 147, 136) var(--metal-dark) rgb(141, 147, 136);
-    padding: 18px 22px 20px;
+    padding: 14px 22px 14px;
 }
 
-.top-line { height: 28px; justify-content: space-between; color: rgb(38, 55, 48); }
+.top-line { height: 28px; flex-shrink: 0; justify-content: space-between; color: rgb(38, 55, 48); }
 .workspace { flex-grow: 1; }
 .display {
     flex-grow: 1;
-    min-width: 560px;
+    flex-shrink: 1;
+    min-width: 420px;
     background-color: rgb(38, 42, 42);
     border-width: 8px;
     border-color: rgb(65, 75, 71);
     margin-right: 20px;
 }
-.screen-bar { height: 42px; justify-content: space-between; align-items: center; padding: 0 14px; color: rgb(178, 193, 168); border-bottom-width: 1px; border-bottom-color: rgb(81, 99, 86); }
-.life-grid { flex-grow: 1; min-height: 340px; }
-.readouts { height: 82px; border-top-width: 1px; border-top-color: rgb(81, 99, 86); padding: 11px 16px; }
+.screen-bar { height: 30px; flex-shrink: 0; justify-content: space-between; align-items: center; padding: 0 14px; color: rgb(178, 193, 168); border-bottom-width: 1px; border-bottom-color: rgb(81, 99, 86); }
+.life-grid { flex-grow: 1; min-height: 96px; }
+.readouts { height: 62px; flex-shrink: 0; border-top-width: 1px; border-top-color: rgb(81, 99, 86); padding: 7px 16px; }
 .readout { min-width: 155px; margin-right: 24px; }
 .readout-caption { color: rgb(139, 158, 141); }
 .readout-value { color: rgb(221, 209, 162); font-size: 24px; margin-top: 4px; }
 .readout-value-compact { color: rgb(221, 209, 162); font-size: 16px; margin-top: 9px; }
 
-.library { width: 236px; color: rgb(34, 47, 42); }
-.section-title { font-size: 14px; margin-bottom: 4px; }
-.archive-note { color: rgb(51, 70, 61); margin-bottom: 12px; }
+.library { width: 236px; flex-shrink: 0; color: rgb(34, 47, 42); }
+.section-title { font-size: 14px; flex-shrink: 0; margin-bottom: 4px; }
+.archive-note { color: rgb(51, 70, 61); flex-shrink: 0; margin-bottom: 8px; }
+
+/* The archive is the one region that may not fit on a short window. Rather than letting it push
+   the machine past the reference height (which clipped the controls at 1280x720), it scrolls. */
+.preset-scroll {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 96px;
+    margin-bottom: 2px;
+}
+
 .preset {
-    height: 56px;
-    margin-bottom: 6px;
-    padding: 7px 12px;
+    height: 46px;
+    flex-shrink: 0;
+    margin-bottom: 5px;
+    padding: 5px 12px;
     background-color: rgb(79, 92, 85);
     border-width: 1px 1px 4px 1px;
     border-color: rgb(132, 144, 132) rgb(132, 144, 132) rgb(52, 61, 58) rgb(132, 144, 132);
@@ -69,10 +90,10 @@
 }
 .preset:hover { background-color: rgb(92, 106, 97); }
 .preset.selected { background-color: rgb(195, 189, 150); color: rgb(43, 58, 48); border-color: rgb(225, 217, 177) rgb(225, 217, 177) rgb(125, 129, 106) rgb(225, 217, 177); }
-.field-label { margin-top: 11px; margin-bottom: 5px; }
-.dropdown { height: 34px; background-color: rgb(59, 72, 65); color: rgb(212, 214, 191); border-width: 1px; border-color: rgb(141, 153, 140); }
+.field-label { margin-top: 11px; margin-bottom: 5px; flex-shrink: 0; }
+.dropdown { height: 34px; flex-shrink: 0; background-color: rgb(59, 72, 65); color: rgb(212, 214, 191); border-width: 1px; border-color: rgb(141, 153, 140); }
 
-.controls { height: 64px; align-items: flex-end; padding-top: 14px; }
+.controls { height: 48px; flex-shrink: 0; align-items: flex-end; padding-top: 8px; }
 .control {
     height: 40px;
     min-width: 82px;

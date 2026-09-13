@@ -10,7 +10,8 @@ namespace ConwayGameOfLife.Verify
     /// </summary>
     internal static class Diagnose
     {
-        public static void Run()
+        /// <summary>Returns 0 if the shipped pulsar matches the canonical RLE and has period 3.</summary>
+        public static int Run()
         {
             LifePattern pulsar = Find("PULSAR");
             Console.WriteLine($"PULSAR declared: kind={pulsar.Kind} period={pulsar.Period} cells={pulsar.Cells.Length}");
@@ -79,6 +80,7 @@ namespace ConwayGameOfLife.Verify
             }
 
             Console.WriteLine($"  summary: missing={missing} extra={extra}");
+            return (missing == 0 && extra == 0) ? 0 : 1;
         }
 
         private static LifePattern Find(string name)
