@@ -10,15 +10,20 @@ namespace ConwayGameOfLife
     ///     scale = lerp(screenW / refW, screenH / refH, match)
     ///
     /// <para>
-    /// <b>This contradicts Unity's documentation</b>, which describes MatchWidthOrHeight as a
-    /// logarithmic interpolation (screenW^m * screenH^(1-m) / ...). The formula above was derived
-    /// from measurement, not from the docs: at 600x1000 against a 1600x900 reference the
-    /// logarithmic form predicts a scale of 0.6454 and a panel width of 929.5, while the running
-    /// Player reported 807.48. The linear form gives lerp(0.375, 1.1111, 0.5) = 0.7431, and
-    /// 600 / 0.7431 = 807.4 - matching the Player to within rounding.
+    /// <b>Measured, not taken from documentation.</b> Unity's MatchWidthOrHeight is widely described
+    /// as a logarithmic interpolation (<c>screenW^m * screenH^(1-m) / ...</c>). That description
+    /// comes from uGUI's <c>CanvasScaler</c> and does not match what UI Toolkit's
+    /// <c>PanelSettings</c> did here: at 600x1000 against a 1600x900 reference the logarithmic form
+    /// predicts a panel width of 929.52, while the running Player laid out 807.48, which the linear
+    /// form reproduces exactly.
     ///
-    /// The two forms agree at 16:9 aspect ratios, which is why every earlier 16:9 sample looked
-    /// like confirmation. They diverge on any other aspect ratio.
+    /// <b>Scope of that claim:</b> this is what Unity 6000.6.0f1 with UI Toolkit
+    /// <c>PanelScaleMode.ScaleWithScreenSize</c> and <c>PanelScreenMatchMode.MatchWidthOrHeight</c>
+    /// was observed to do, verified against a Player build at three resolutions. It is not a claim
+    /// that any Unity documentation is wrong in general.
+    ///
+    /// The two forms coincide at 16:9, which is why every earlier 16:9-only sample appeared to
+    /// confirm the logarithmic version.
     /// </para>
     ///
     /// This exists because the PlayMode test host renders at a fixed 640x480: the math lets other

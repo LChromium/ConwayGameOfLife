@@ -374,6 +374,7 @@ namespace ConwayGameOfLife.Tests
             Assert.Greater(viewport.height, 0f, "the panel has no height");
 
             float visibleTop = -panelTree.worldBound.yMin; // panel space starts at its own origin
+            _ = visibleTop;
             foreach (string region in new[] { "header", "machine", "controls", "footer", "display", "library" })
             {
                 Rect bounds = FindByClass(root, region).worldBound;
@@ -383,6 +384,31 @@ namespace ConwayGameOfLife.Tests
                 Assert.GreaterOrEqual(bounds.yMin, -0.5f, $"'{region}' starts above the panel origin");
                 Assert.LessOrEqual(bounds.yMax, viewport.height + 0.5f, $"'{region}' extends past the bottom edge");
             }
+
+            // Regression guard for a real defect: in the narrow layout the controls row ran off the
+            // right edge and clipped "清空" completely (visible in the 600x1000 Player capture). The
+            // region check above cannot catch that, because what overflows is a button INSIDE the
+            // row - the row's own box still fits.
+            List<Button> controls = FindByClass(root, "controls").Query<Button>(className: "control").ToList();
+            Assert.GreaterOrEqual(controls.Count, 5,
+                "expected the transport controls (run / step / reset / randomize / clear)");
+
+            foreach (Button control in controls)
+            {
+                Rect bounds = control.worldBound;
+
+                Assert.Greater(bounds.width, 0f, $"control '{control.text}' has no width");
+                Assert.GreaterOrEqual(bounds.xMin, -0.5f, $"control '{control.text}' starts left of the panel");
+                Assert.LessOrEqual(bounds.xMax, viewport.xMax + 0.5f,
+                    $"control '{control.text}' extends past the right edge and would be clipped");
+                Assert.LessOrEqual(bounds.yMax, viewport.height + 0.5f,
+                    $"control '{control.text}' extends past the bottom edge and would be clipped");
+            }
+
+            Button clearButton = FindButton(root, "清空");
+            Assert.IsNotNull(clearButton, "missing the '清空' button");
+            Assert.LessOrEqual(clearButton.worldBound.xMax, viewport.xMax + 0.5f,
+                "the '清空' button is clipped by the right edge");
 
             // The machine block must be fully inside the region of the panel that is actually
             // visible on screen. This is the real clipping test: on a short window the panel is

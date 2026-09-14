@@ -13,16 +13,20 @@ namespace ConwayGameOfLife
         /// <summary>
         /// Panel width below which the workspace stacks the archive under the grid, in panel units.
         ///
-        /// 1280 is chosen against a non-obvious property of the fit transform. With
-        /// MatchWidthOrHeight at 0.5 the visible panel width is sqrt(screenW * screenH * 16/9) - the
-        /// window's aspect ratio cancels out, so width depends only on the window's AREA. A landscape
-        /// 1024x768 window therefore exposes ~1386 units and keeps two columns, while a portrait
-        /// 600x1000 window exposes only ~930 and must stack. The narrowest panel any window can
-        /// produce is 1200 (at 1:1), so the threshold has to sit above that to be reachable at all.
+        /// <para><b>Why 1280, argued from content rather than from the formula.</b>
+        /// The two-column layout needs the display plus the archive plus their margin. In the wide
+        /// layout the archive is a fixed 236 units and the display takes the rest, so at a 1280-wide
+        /// panel the display gets roughly 1000 - comfortable for a 96-cell-wide grid. Below that the
+        /// grid would start losing cell size faster than the archive's fixed width can justify, so
+        /// the stacked layout (which gives the grid the full panel width) is the better trade.</para>
         ///
-        /// A purely HORIZONTAL decision: stacking frees horizontal room. Height shortage is absorbed
-        /// by the scrolling archive instead, since the stacked layout is itself ~828 units tall and
-        /// cannot rescue a short panel.
+        /// <para><b>How to compute the panel width.</b> With <c>ScaleWithScreenSize</c> and
+        /// MatchWidthOrHeight at 0.5, the fit scale is <c>(W/1600 + H/900) / 2</c>, so the visible
+        /// panel width is <c>W / scale</c>. Note this depends on both window dimensions and has
+        /// <b>no positive lower bound</b>: a narrow window yields a narrow panel (600x1000 gives
+        /// 807). An earlier comment here claimed the width depended only on window area and could
+        /// never fall below a fixed minimum - both were wrong, and a portrait capture disproved
+        /// them.</para>
         /// </summary>
         private const float DesignWidth = 1280f;
 

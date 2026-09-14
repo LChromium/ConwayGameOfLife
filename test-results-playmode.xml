@@ -1,56 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
-<test-run id="2" testcasecount="13" result="Passed" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.7132496">
-  <test-suite type="TestSuite" id="1021" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.713250" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+<test-run id="2" testcasecount="13" result="Passed" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.3821337">
+  <test-suite type="TestSuite" id="1021" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.382134" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
     <properties>
       <property name="platform" value="PlayMode" />
     </properties>
-    <test-suite type="Assembly" id="1036" name="ConwayGameOfLife.Tests.PlayMode.dll" fullname="C:/Users/12542/ConwayGameOfLife/Library/ScriptAssemblies/ConwayGameOfLife.Tests.PlayMode.dll" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.706182" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+    <test-suite type="Assembly" id="1036" name="ConwayGameOfLife.Tests.PlayMode.dll" fullname="C:/Users/12542/ConwayGameOfLife/Library/ScriptAssemblies/ConwayGameOfLife.Tests.PlayMode.dll" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.375148" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
       <properties>
-        <property name="_PID" value="68676" />
+        <property name="_PID" value="76696" />
         <property name="_APPDOMAIN" value="Unity Child Domain" />
         <property name="platform" value="PlayMode" />
         <property name="EditorOnly" value="False" />
       </properties>
-      <test-suite type="TestSuite" id="1037" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.701089" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+      <test-suite type="TestSuite" id="1037" name="ConwayGameOfLife" fullname="ConwayGameOfLife" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.370444" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
         <properties />
-        <test-suite type="TestSuite" id="1038" name="Tests" fullname="ConwayGameOfLife.Tests" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.692643" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+        <test-suite type="TestSuite" id="1038" name="Tests" fullname="ConwayGameOfLife.Tests" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.362134" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
           <properties />
-          <test-suite type="TestFixture" id="1022" name="LifeTerminalBootstrapTests" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:24Z" duration="5.683360" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
+          <test-suite type="TestFixture" id="1022" name="LifeTerminalBootstrapTests" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" testcasecount="13" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:56Z" duration="5.352793" total="13" passed="13" failed="0" inconclusive="0" skipped="0" asserts="0">
             <properties />
-            <test-case id="1023" name="Bootstrap_BuildsCompleteInterface" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_BuildsCompleteInterface" methodname="Bootstrap_BuildsCompleteInterface" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="828845812" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:19Z" duration="0.046070" asserts="0">
+            <test-case id="1023" name="Bootstrap_BuildsCompleteInterface" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_BuildsCompleteInterface" methodname="Bootstrap_BuildsCompleteInterface" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1410745872" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:50Z" duration="0.043000" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1025" name="Bootstrap_IsIdempotent" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_IsIdempotent" methodname="Bootstrap_IsIdempotent" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="577825617" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:19Z" duration="0.025637" asserts="0">
+            <test-case id="1025" name="Bootstrap_IsIdempotent" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_IsIdempotent" methodname="Bootstrap_IsIdempotent" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="652866332" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:50Z" duration="0.025344" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1024" name="Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" methodname="Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1167874754" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:19Z" duration="0.034165" asserts="0">
+            <test-case id="1024" name="Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" methodname="Bootstrap_LoadsTheRuntimeThemeAndAppliesStyles" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1590533914" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:50Z" duration="0.034034" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1034" name="Clock_RunsAtTheRequestedRateAcrossRealFrames" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Clock_RunsAtTheRequestedRateAcrossRealFrames" methodname="Clock_RunsAtTheRequestedRateAcrossRealFrames" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1876840631" result="Passed" start-time="2026-09-13 17:57:19Z" end-time="2026-09-13 17:57:21Z" duration="2.404271" asserts="0">
+            <test-case id="1034" name="Clock_RunsAtTheRequestedRateAcrossRealFrames" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Clock_RunsAtTheRequestedRateAcrossRealFrames" methodname="Clock_RunsAtTheRequestedRateAcrossRealFrames" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1025410256" result="Passed" start-time="2026-09-14 06:45:50Z" end-time="2026-09-14 06:45:53Z" duration="2.388620" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
-              <output><![CDATA[[clock-running] requested=20 gen/s  achieved=20.0 gen/s  advanced=40 generations  elapsed=2.00s over 162 frames  meanFrameMs=12.367  worstFrameMs=30.396  runtime=Unity Editor PlayMode (NOT a Player build)
-[clock-running] requested=20 gen/s  achieved=20.0 gen/s  advanced=40 generations  elapsed=2.00s over 162 frames  meanFrameMs=12.367  worstFrameMs=30.396  runtime=Unity Editor PlayMode (NOT a Player build)
-[clock-running] engine step cost while evolving: 0.1636 ms/generation (2000 steps, board 96x64 = 6144 cells, Unity Editor runtime)
-[clock-running] engine step cost while evolving: 0.1636 ms/generation (2000 steps, board 96x64 = 6144 cells, Unity Editor runtime)
+              <output><![CDATA[[clock-running] requested=20 gen/s  achieved=19.9 gen/s  advanced=40 generations  elapsed=2.01s over 172 frames  meanFrameMs=11.672  worstFrameMs=27.303  runtime=Unity Editor PlayMode (NOT a Player build)
+[clock-running] requested=20 gen/s  achieved=19.9 gen/s  advanced=40 generations  elapsed=2.01s over 172 frames  meanFrameMs=11.672  worstFrameMs=27.303  runtime=Unity Editor PlayMode (NOT a Player build)
+[clock-running] engine step cost while evolving: 0.1540 ms/generation (2000 steps, board 96x64 = 6144 cells, Unity Editor runtime)
+[clock-running] engine step cost while evolving: 0.1540 ms/generation (2000 steps, board 96x64 = 6144 cells, Unity Editor runtime)
 ]]></output>
             </test-case>
-            <test-case id="1033" name="Controls_AreAllInsideThePanelViewport" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Controls_AreAllInsideThePanelViewport" methodname="Controls_AreAllInsideThePanelViewport" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1934764854" result="Passed" start-time="2026-09-13 17:57:21Z" end-time="2026-09-13 17:57:21Z" duration="0.051823" asserts="0">
+            <test-case id="1033" name="Controls_AreAllInsideThePanelViewport" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Controls_AreAllInsideThePanelViewport" methodname="Controls_AreAllInsideThePanelViewport" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1923657764" result="Passed" start-time="2026-09-14 06:45:53Z" end-time="2026-09-14 06:45:53Z" duration="0.047879" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
@@ -60,59 +60,59 @@
 [layout-fit] screen=640x480 panel=1371x1029 scale=0.4667 machineBottomOnScreen=456
 ]]></output>
             </test-case>
-            <test-case id="1031" name="EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" methodname="EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="27753141" result="Passed" start-time="2026-09-13 17:57:21Z" end-time="2026-09-13 17:57:21Z" duration="0.112759" asserts="0">
+            <test-case id="1031" name="EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" methodname="EditingTheRealBoard_PausesTheClockAndRefreshesTheReadout" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1365628532" result="Passed" start-time="2026-09-14 06:45:53Z" end-time="2026-09-14 06:45:53Z" duration="0.122342" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1030" name="GridElement_PaintsAndRaisesEdited_OnItsOwnObject" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.GridElement_PaintsAndRaisesEdited_OnItsOwnObject" methodname="GridElement_PaintsAndRaisesEdited_OnItsOwnObject" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="199287520" result="Passed" start-time="2026-09-13 17:57:21Z" end-time="2026-09-13 17:57:21Z" duration="0.032781" asserts="0">
+            <test-case id="1030" name="GridElement_PaintsAndRaisesEdited_OnItsOwnObject" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.GridElement_PaintsAndRaisesEdited_OnItsOwnObject" methodname="GridElement_PaintsAndRaisesEdited_OnItsOwnObject" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="373684889" result="Passed" start-time="2026-09-14 06:45:53Z" end-time="2026-09-14 06:45:53Z" duration="0.033144" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1027" name="LoadingAPreset_UpdatesTheReadouts" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.LoadingAPreset_UpdatesTheReadouts" methodname="LoadingAPreset_UpdatesTheReadouts" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="967230615" result="Passed" start-time="2026-09-13 17:57:21Z" end-time="2026-09-13 17:57:22Z" duration="0.251659" asserts="0">
+            <test-case id="1027" name="LoadingAPreset_UpdatesTheReadouts" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.LoadingAPreset_UpdatesTheReadouts" methodname="LoadingAPreset_UpdatesTheReadouts" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="935088924" result="Passed" start-time="2026-09-14 06:45:53Z" end-time="2026-09-14 06:45:53Z" duration="0.202130" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1035" name="MicroBenchmark_StepCostInsideTheEditorRuntime" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.MicroBenchmark_StepCostInsideTheEditorRuntime" methodname="MicroBenchmark_StepCostInsideTheEditorRuntime" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1349049046" result="Passed" start-time="2026-09-13 17:57:22Z" end-time="2026-09-13 17:57:22Z" duration="0.690995" asserts="0">
+            <test-case id="1035" name="MicroBenchmark_StepCostInsideTheEditorRuntime" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.MicroBenchmark_StepCostInsideTheEditorRuntime" methodname="MicroBenchmark_StepCostInsideTheEditorRuntime" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1776523594" result="Passed" start-time="2026-09-14 06:45:53Z" end-time="2026-09-14 06:45:54Z" duration="0.454429" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
-              <output><![CDATA[[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. Board 96x64 = 6144 cells. 2000 synchronous Update() calls advanced 3074 generations in 580.5 ms => 0.1888 ms/generation. Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. Cite this line as the source for any per-generation figure.
-[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. Board 96x64 = 6144 cells. 2000 synchronous Update() calls advanced 3074 generations in 580.5 ms => 0.1888 ms/generation. Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. Cite this line as the source for any per-generation figure.
+              <output><![CDATA[[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. Board 96x64 = 6144 cells. 2000 synchronous Update() calls advanced 2133 generations in 367.5 ms => 0.1723 ms/generation. Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. Cite this line as the source for any per-generation figure.
+[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. Board 96x64 = 6144 cells. 2000 synchronous Update() calls advanced 2133 generations in 367.5 ms => 0.1723 ms/generation. Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. Cite this line as the source for any per-generation figure.
 ]]></output>
             </test-case>
-            <test-case id="1032" name="PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" methodname="PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1808280139" result="Passed" start-time="2026-09-13 17:57:22Z" end-time="2026-09-13 17:57:23Z" duration="0.311208" asserts="0">
+            <test-case id="1032" name="PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" methodname="PresetArchive_ScrollsWithoutOverlappingTheBoundaryControl" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1895713" result="Passed" start-time="2026-09-14 06:45:54Z" end-time="2026-09-14 06:45:54Z" duration="0.289640" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1028" name="RunButton_StartsAndStopsTheSimulation" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.RunButton_StartsAndStopsTheSimulation" methodname="RunButton_StartsAndStopsTheSimulation" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1841927542" result="Passed" start-time="2026-09-13 17:57:23Z" end-time="2026-09-13 17:57:23Z" duration="0.033039" asserts="0">
+            <test-case id="1028" name="RunButton_StartsAndStopsTheSimulation" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.RunButton_StartsAndStopsTheSimulation" methodname="RunButton_StartsAndStopsTheSimulation" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="236632117" result="Passed" start-time="2026-09-14 06:45:54Z" end-time="2026-09-14 06:45:54Z" duration="0.033219" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1029" name="Running_ActuallyAdvancesGenerationsAcrossFrames" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Running_ActuallyAdvancesGenerationsAcrossFrames" methodname="Running_ActuallyAdvancesGenerationsAcrossFrames" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1261203853" result="Passed" start-time="2026-09-13 17:57:23Z" end-time="2026-09-13 17:57:24Z" duration="1.617728" asserts="0">
+            <test-case id="1029" name="Running_ActuallyAdvancesGenerationsAcrossFrames" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.Running_ActuallyAdvancesGenerationsAcrossFrames" methodname="Running_ActuallyAdvancesGenerationsAcrossFrames" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="68263762" result="Passed" start-time="2026-09-14 06:45:54Z" end-time="2026-09-14 06:45:56Z" duration="1.611061" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />
                 <property name="repeatIteration" value="0" />
               </properties>
             </test-case>
-            <test-case id="1026" name="SteppingThroughTheInterface_AdvancesTheGenerationCounter" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.SteppingThroughTheInterface_AdvancesTheGenerationCounter" methodname="SteppingThroughTheInterface_AdvancesTheGenerationCounter" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="245284188" result="Passed" start-time="2026-09-13 17:57:24Z" end-time="2026-09-13 17:57:24Z" duration="0.058624" asserts="0">
+            <test-case id="1026" name="SteppingThroughTheInterface_AdvancesTheGenerationCounter" fullname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests.SteppingThroughTheInterface_AdvancesTheGenerationCounter" methodname="SteppingThroughTheInterface_AdvancesTheGenerationCounter" classname="ConwayGameOfLife.Tests.LifeTerminalBootstrapTests" runstate="Runnable" seed="1222794240" result="Passed" start-time="2026-09-14 06:45:56Z" end-time="2026-09-14 06:45:56Z" duration="0.055185" asserts="0">
               <properties>
                 <property name="_JOINTYPE" value="UnityCombinatorial" />
                 <property name="retryIteration" value="0" />

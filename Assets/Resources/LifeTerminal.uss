@@ -123,20 +123,40 @@
 
 /* ===========================================================================
    Narrow layout (the "compact" class is toggled from LifeTerminalController
-   when the root's resolved size cannot host two columns).
+   when the root's resolved width cannot host two columns).
    USS has no media queries - there is no @media and no width-based selector,
    so the switch MUST come from code watching GeometryChangedEvent.
-
-   Sizing rule in this mode: the grid must be the element that absorbs spare
-   height, and the archive gets a bounded scroll strip. Letting .display keep
-   flex-grow: 1 starves the archive (observed in a 1280x720 Player capture:
-   the list collapsed to one visible row while the display held a large empty
-   band below the grid).
    =========================================================================== */
 .compact .workspace { flex-direction: column; }
 .compact .display { flex-grow: 0; margin-right: 0; margin-bottom: 10px; min-width: 0; }
+
+/* The grid must stay usable, but it is NOT what absorbs spare height here: in this layout the
+   archive below it takes the slack, so the grid keeps a fixed floor rather than growing into a
+   tall empty band. */
 .compact .life-grid { flex-grow: 0; min-height: 300px; }
+
 .compact .library { width: auto; flex-grow: 1; flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+
+/* The controls row is a single unwrapped flex row of fixed-width buttons. In a narrow panel it
+   ran off the right edge and clipped "清空" entirely (visible in the 600x1000 capture). It must
+   wrap instead, so every control stays reachable. */
+.compact .controls {
+    height: auto;
+    flex-wrap: wrap;
+    align-items: center;
+    padding-top: 10px;
+}
+.compact .control { margin-bottom: 6px; }
+.compact .speed-label { margin: 0 8px 6px 4px; }
+.compact .speed-value { margin: 0 8px 6px 8px; }
+
+/* The spacer exists to push 随机播种/清空 to the right in the wide layout. With wrapping it would
+   consume a whole row and leave the trailing buttons stranded, so it collapses here. */
+.compact .spacer { display: none; }
+
+/* The header is also a single row; let the status line wrap under the title when narrow. */
+.compact .header { height: auto; min-height: 64px; flex-wrap: wrap; }
+
 .compact .section-title,
 .compact .archive-note { width: 100%; }
 .compact .preset-scroll { width: 100%; flex-grow: 1; min-height: 132px; }

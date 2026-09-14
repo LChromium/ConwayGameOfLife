@@ -487,14 +487,16 @@ namespace ConwayGameOfLife.Tests
         [Test]
         public void PanelFit_PortraitViewportStacksInsteadOfSqueezingTwoColumns()
         {
-            // Worth recording, because it is counter-intuitive. With the scale being a linear
-            // blend of the width and height ratios at match 0.5, the visible panel width works out
-            // to (screenW + screenH * 16/9) / 2 - it depends on both dimensions, and the narrowest
-            // panel any window can produce is 1152 units, at a 1:1 aspect ratio.
+            // With the scale a linear blend of the width and height ratios at match 0.5:
+            //     scale    = (W/1600 + H/900) / 2
+            //     panelW   = W / scale        panelH = H / scale
+            // The width therefore depends on BOTH dimensions and has no positive lower bound - a
+            // narrow window gives a narrow panel. (An earlier comment here claimed width depended
+            // only on window area with a floor of 1152; the portrait case below disproves it.)
             //
-            // Consequences: a landscape 1024x768 window still exposes ~1371 and keeps two columns,
-            // while a portrait 600x1000 window exposes only ~807 and must stack - there the height
-            // is generous and it is the width that got squeezed.
+            // A landscape 1024x768 window exposes ~1371 and keeps two columns, while a portrait
+            // 600x1000 window exposes only ~807 and must stack: there the height is generous and it
+            // is the width that got squeezed.
             (float portraitWidth, float portraitHeight) =
                 PanelScreenFit.VisiblePanelSize(600, 1000, ReferenceWidth, ReferenceHeight, ReferenceMatch);
 
@@ -511,6 +513,32 @@ namespace ConwayGameOfLife.Tests
             (float landscapeWidth, _) =
                 PanelScreenFit.VisiblePanelSize(1600, 1000, ReferenceWidth, ReferenceHeight, ReferenceMatch);
             Assert.GreaterOrEqual(landscapeWidth, 1280f, "a landscape viewport should keep two columns");
+        }
+
+        [Test]
+        public void PanelFit_MatchesTheLinearFormulaDirectly()
+        {
+            // The formula is not obvious from any single sample, so state it and check it head-on:
+            // the panel is narrower than the window whenever the fit scale exceeds 1... and the
+            // scale at match 0.5 is just the mean of the two ratios.
+            foreach ((int w, int h) in new[] { (600, 1000), (1280, 720), (1024, 768), (600, 600), (400, 900) })
+            {
+                float expectedScale = ((float)w / ReferenceWidth + (float)h / ReferenceHeight) / 2f;
+                float actualScale = PanelScreenFit.ScaleFactor(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+                Assert.AreEqual(expectedScale, actualScale, 0.0001f, $"{w}x{h}: scale is not the mean of the ratios");
+
+                (float panelWidth, float panelHeight) =
+                    PanelScreenFit.VisiblePanelSize(w, h, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+                Assert.AreEqual(w / expectedScale, panelWidth, 0.01f, $"{w}x{h}: panel width");
+                Assert.AreEqual(h / expectedScale, panelHeight, 0.01f, $"{w}x{h}: panel height");
+            }
+
+            // Narrow windows really do give narrow panels - there is no floor. This is the specific
+            // claim an earlier comment got wrong.
+            (float narrowPanel, _) =
+                PanelScreenFit.VisiblePanelSize(400, 900, ReferenceWidth, ReferenceHeight, ReferenceMatch);
+            Assert.Less(narrowPanel, 700f,
+                "a narrow window should give a narrow panel; there is no lower bound");
         }
 
         [Test]
