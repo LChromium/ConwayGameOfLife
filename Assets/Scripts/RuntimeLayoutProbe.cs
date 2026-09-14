@@ -249,46 +249,89 @@ namespace ConwayGameOfLife
                 return;
             }
 
-            // Names as they appear in the button captions ("<chinese>\n<kind>").
-            // "-lifePattern PENTADECATHLON" selects the longest specimen name for title checks.
-            string[] candidates = string.IsNullOrEmpty(requestedPattern)
-                ? new[] { "脉冲星" }
-                : new[] { "十五周期振荡器", "轻型飞船", "闪烁器", "滑翔机", "脉冲星", "蜂巢", "方块", "蟾蜍" };
-
             List<Button> presets = root.Query<Button>(className: "preset").ToList();
-            Debug.Log($"[layout-probe] SelectSpecimen: requested='{requestedPattern ?? "(default)"}' " +
-                      $"presetButtons={presets.Count}");
-
-            var seen = new StringBuilder();
-            foreach (Button button in presets)
+            if (presets.Count != LifePatterns.All.Length)
             {
-                seen.Append('[').Append(button.text?.Replace("\n", "|")).Append(']');
+                Debug.LogWarning($"[layout-probe] SelectSpecimen: expected {LifePatterns.All.Length} preset " +
+                                 $"buttons but found {presets.Count}; archive not built yet");
+                return;
             }
 
-            Debug.Log($"[layout-probe] SelectSpecimen: captions={seen}");
-
-            foreach (string candidate in candidates)
+            // Resolve the pattern to select.
+            //
+            // With no argument, default to the pulsar (the largest bundled pattern). With
+            // "-lifePattern <EnglishName>", match the name EXACTLY against the archive. An earlier
+            // version only checked whether the argument was non-empty and then walked a hard-coded
+            // candidate list, so "-lifePattern GLIDER" silently selected the pentadecathlon - the
+            // parameter looked like it worked while ignoring its value.
+            LifePattern pattern;
+            if (string.IsNullOrEmpty(requestedPattern))
             {
-                foreach (Button button in presets)
+                pattern = FindPatternByEnglishName("PULSAR");
+                if (pattern == null)
                 {
-                    if (button.text == null || !button.text.Contains(candidate))
-                    {
-                        continue;
-                    }
-
-                    using (NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled())
-                    {
-                        submit.target = button;
-                        button.SendEvent(submit);
-                    }
-
-                    specimenSelected = true;
-                    Debug.Log($"[layout-probe] SelectSpecimen: pressed '{candidate}' (caption '{button.text?.Replace("\n", "|")}')");
+                    Debug.LogWarning("[layout-probe] SelectSpecimen: PULSAR not found in the archive");
+                    return;
+                }
+            }
+            else
+            {
+                pattern = FindPatternByEnglishName(requestedPattern);
+                if (pattern == null)
+                {
+                    Debug.LogError($"[layout-probe] SelectSpecimen: unknown pattern '{requestedPattern}'. " +
+                                   $"Known names: {string.Join(", ", KnownEnglishNames())}");
                     return;
                 }
             }
 
-            Debug.LogWarning("[layout-probe] SelectSpecimen: no candidate matched any preset caption");
+            // The buttons are labelled "<chinese>\n<kind>", so match on the pattern's own Chinese name.
+            Button target = null;
+            for (int i = 0; i < presets.Count; i++)
+            {
+                if (presets[i].text != null && presets[i].text.StartsWith(pattern.Name))
+                {
+                    target = presets[i];
+                    break;
+                }
+            }
+
+            if (target == null)
+            {
+                Debug.LogError($"[layout-probe] SelectSpecimen: no preset button labelled '{pattern.Name}'");
+                return;
+            }
+
+            using (NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled())
+            {
+                submit.target = target;
+                target.SendEvent(submit);
+            }
+
+            specimenSelected = true;
+            Debug.Log($"[layout-probe] SelectSpecimen: selected {pattern.EnglishName} " +
+                      $"('{target.text?.Replace("\n", "|")}')");
+        }
+
+        private static LifePattern FindPatternByEnglishName(string englishName)
+        {
+            foreach (LifePattern pattern in LifePatterns.All)
+            {
+                if (string.Equals(pattern.EnglishName, englishName, StringComparison.Ordinal))
+                {
+                    return pattern;
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> KnownEnglishNames()
+        {
+            foreach (LifePattern pattern in LifePatterns.All)
+            {
+                yield return pattern.EnglishName;
+            }
         }
 
         private static VisualElement FindAttachedRoot()
@@ -363,7 +406,7 @@ namespace ConwayGameOfLife
                 // pentadecathlon is selected. Record it with its measured and preferred widths so
                 // "does the title fit?" is answered by a number, not by squinting at a screenshot.
                 VisualElement screenBar = root.Q(className: "screen-bar");
-                Label caption = null;
+                Label captionLabel = null;
                 if (screenBar != null)
                 {
                     foreach (VisualElement element in screenBar.Query<VisualElement>(className: "micro").ToList())
@@ -371,23 +414,23 @@ namespace ConwayGameOfLife
                         if (element is Label label &&
                             (label.text.StartsWith("样本 ") || label.text.StartsWith("自由样本")))
                         {
-                            caption = label;
+                            captionLabel = label;
                             break;
                         }
                     }
                 }
 
-                if (caption != null)
+                if (captionLabel != null)
                 {
-                    float measured = caption.MeasureTextSize(
-                        caption.text, 0f, VisualElement.MeasureMode.Undefined,
+                    float measured = captionLabel.MeasureTextSize(
+                        captionLabel.text, 0f, VisualElement.MeasureMode.Undefined,
                         0f, VisualElement.MeasureMode.Undefined).x;
 
-                    sb.Append($"\"captionText\":\"{caption.text.Replace("\\", "/").Replace("\"", "'")}\",");
-                    sb.Append($"\"captionTextLength\":{caption.text.Length},");
-                    sb.Append($"\"captionBoxWidth\":{caption.worldBound.width:F2},");
+                    sb.Append($"\"captionText\":\"{captionLabel.text.Replace("\\", "/").Replace("\"", "'")}\",");
+                    sb.Append($"\"captionTextLength\":{captionLabel.text.Length},");
+                    sb.Append($"\"captionBoxWidth\":{captionLabel.worldBound.width:F2},");
                     sb.Append($"\"captionPreferredWidth\":{measured:F2},");
-                    sb.Append($"\"captionClipped\":{((measured > caption.worldBound.width + 0.5f) && !caption.style.whiteSpace.ToString().Contains("Normal")).ToString().ToLowerInvariant()},");
+                    sb.Append($"\"captionClipped\":{((measured > captionLabel.worldBound.width + 0.5f) && !captionLabel.style.whiteSpace.ToString().Contains("Normal")).ToString().ToLowerInvariant()},");
                 }
 
                 VisualElement display = root.Q(className: "display");

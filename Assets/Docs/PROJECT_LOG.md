@@ -477,19 +477,32 @@ R5c 复盘时又称 1152"是对数模型下的值"（第二次错，对数模型
 
 R5c 只验证了最长样本名「十五周期振荡器」在**列表**中可见，未验证**选中后顶部标题栏**是否容纳。
 
-**R5d 已完成验收**。给探针加了 `-lifePattern <名称>` 参数以选中指定样本，并在测量记录里
-输出标题文本、可用宽度与文本首选宽度：
+**R5d 已完成验收，R5e 修正了选样参数并重跑。** 给探针加了 `-lifePattern <EnglishName>` 参数
+以选中指定样本，并在测量记录里输出标题文本、可用宽度与文本首选宽度：
 
 | 分辨率 | 标题文本 | 首选宽度 | 可用宽度 | 裁切 |
 |---|---|---|---|---|
 | 600×1000（竖屏，compact）| `样本 06 / 十五周期振荡器 · PENTADECATHLON` | 215.3 | 218.0 | 否 |
 | 1280×720（两栏）| 同上 | 215.0 | 218.8 | 否 |
 
-截图：`Screenshots/player-600x1000-longname.png`、`player-1280x720-longname.png`。
-两者均显示完整标题、脉冲星棋盘（12 细胞）与列表高亮。
+原始记录：`Screenshots/player-title-acceptance.jsonl`（随交付保存，不再只存在于本机
+`AppData/LocalLow`）。截图：`Screenshots/player-600x1000-longname.png`、`player-1280x720-longname.png`。
+两者均显示完整标题、**十五周期振荡器（12 细胞）**的棋盘与列表高亮。
 
-**注意余量很小（约 3 px）**。若将来把样本中文名改长，或调整 `.screen-bar` 字号/内边距，
-这个余量会被吃掉。当前不做预防性改动，但改动这些位置时应重新跑一次该验收。
+**关于"约 3 px 余量"的含义**：那是**标题文本首选宽度与当前 Label 盒子宽度之差**
+（215.3 vs 218.0），**不是整个标题栏只剩 3 px**——截图里标题右侧仍有明显空白。
+因此不需要为此调整布局。仍记录在此，是因为若改长样本名或调整 `.screen-bar` 字号/内边距，
+这个差值是首先会被吃掉的部分。
+
+**R5e 修正的探针缺陷**：`-lifePattern` 原先只判断参数是否为空，随后走一个硬编码候选表，
+因此 `-lifePattern GLIDER` 也会选中十五周期振荡器——**参数看似生效，实则忽略其值**。
+现改为按 `LifePattern.EnglishName` **精确匹配**，未知名称明确报错并列出可用名称：
+
+```
+-lifePattern GLIDER          -> selected GLIDER ('滑翔机|飞船 / PERIOD 04')
+-lifePattern PENTADECATHLON  -> selected PENTADECATHLON ('十五周期振荡器|循环震荡 / PERIOD 15')
+-lifePattern NOT_A_PATTERN   -> unknown pattern 'NOT_A_PATTERN'. Known names: BLOCK, BEEHIVE, ...
+```
 
 ### T15 — 首次运行存在一次性长帧（R5c 观察到）
 
