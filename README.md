@@ -117,6 +117,14 @@ dotnet run --project .verify/Verify.csproj -c Release -- selftest        # 证�
 git -c http.proxy=http://127.0.0.1:7897 push origin main
 ```
 
+若报 `schannel: failed to receive handshake, SSL/TLS connection failed`，
+改用 OpenSSL 后端即可绕过（本机 Windows schannel 经该代理握手失败）：
+
+```powershell
+git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 `
+    -c http.sslBackend=openssl push origin main
+```
+
 若你的环境可直连 GitHub，则无需任何配置。
 
 ### 复现验证所需
