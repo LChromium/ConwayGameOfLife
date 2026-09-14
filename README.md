@@ -14,7 +14,7 @@
 | 至少两种**稳定状态** | 完成 | 方块 BLOCK、蜂巢 BEEHIVE |
 | 至少两种**振荡状态** | 完成 | 闪烁器 BLINKER、蟾蜍 TOAD（周期 2） |
 | 至少两种**循环震荡状态** | 完成 | 脉冲星 PULSAR（周期 3）、十五周期振荡器 PENTADECATHLON（周期 15） |
-| 进阶：实现效率 | 完成 | 双缓冲零分配；实测 7,600 万格/秒、每代 0.231 ms；详见 [技术分析](Assets/Docs/TechnicalAnalysis.md) |
+| 进阶：实现效率 | 完成 | 双缓冲零分配；独立工具实测 7,600 万格/秒、0.206 ms/代；详见 [技术分析](Assets/Docs/TechnicalAnalysis.md) |
 | 文档：技术分析 | 完成 | [`Assets/Docs/TechnicalAnalysis.md`](Assets/Docs/TechnicalAnalysis.md) |
 | 文档：实现文档 | 完成 | [`Assets/Docs/Implementation.md`](Assets/Docs/Implementation.md) |
 | 文档：工作记录 | 完成 | [`Assets/Docs/PROJECT_LOG.md`](Assets/Docs/PROJECT_LOG.md)（含未决张力与决策依据）|
@@ -174,7 +174,7 @@ Builds\LifeTerminal.exe -screen-width 1920 -screen-height 1080 -lifeLayoutProbe
 
 ---
 
-## 6. 已知边界与后续可做的事
+## 6. 项目结构
 
 ```
 Assets/
@@ -186,13 +186,17 @@ Assets/
 │   ├── PanelScreenFit.cs          # 面板缩放数学（纯函数，可跨分辨率单测）
 │   └── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
 ├── Tests/
-│   ├── EditMode/                  # 规则、边界、簿记、样本行为、分辨率数学（32 项）
+│   ├── EditMode/                  # 规则、边界、簿记、样本行为、分辨率数学（37 项）
 │   │   ├── ConwayGameOfLife.Tests.EditMode.asmdef
 │   │   ├── LifeSimulationTests.cs
 │   │   └── LifePatternTests.cs
 │   └── PlayMode/                  # 界面自举、交互、布局适配、性能口径（13 项）
 │       ├── ConwayGameOfLife.Tests.PlayMode.asmdef
 │       └── LifeTerminalBootstrapTests.cs
+├── Editor/
+│   ├── PlayerBuild.cs             # 开发版 Player 构建入口（-executeMethod 调用）
+│   └── CaptureLayoutTool.cs       # 编辑器内布局截图诊断
+├── link.xml                       # 保留运行时探针，防止托管剥离移除
 ├── Resources/
 │   ├── LifeTerminal.uss           # 终端风格样式
 │   └── LifeRuntimeTheme.tss       # 主题入口
@@ -201,6 +205,7 @@ Assets/
     ├── Implementation.md          # 实现文档：模块、数据流、扩展方式
     └── PROJECT_LOG.md             # 工作记录：声称→证据对照、决策、未决张力
 
+Screenshots/                        # 真实 Player 截图与原始测量记录
 .verify/                            # 独立校验工具（不属于 Unity 工程）
 ```
 
@@ -209,10 +214,12 @@ Assets/
 
 ---
 
-## 7. 开发环境说明
+## 7. 已知边界与后续可做的事
 
-- **渲染成本尚未采样**：规则推进每代仅 0.231 ms，但 `LifeGridElement.DrawGrid` 每次重绘会为全部 6,144 个格子逐个构建路径。**在没有 Profiler 数据前不要优化规则内核**——先分别采样「规则推进 / 网格重绘 / UI 布局」三段。若将来优化绘制，必须保留死细胞的网格底纹外观。
+- **分项成本仍未测量**：规则推进本身很便宜（独立工具 0.206 ms/代），但「规则推进 / UI Toolkit 布局 / Painter2D 绘制」各占整帧多少**尚未测量**。因此**不指定优化方向**——在取得 Profiler 分项数据前，不实施 Burst / GPU / 位打包。若将来优化绘制，必须保留死细胞的网格底纹外观。
 - **环绕边界有性能代价**：实测取模运算使**吞吐下降 39.5%**（7,600 万 → 4,600 万格/秒），换算成**每代耗时增加 65.4%**。优化方式是"幽灵边框"（ghost border）而非逐邻居取模。
-- **窄窗口的响应式布局未实现**：内容实测需 949px 而参考高度为 900px，已做多处收紧并给样本列表加滚动；更矮的窗口会优先挤压装饰性的页脚。真正的窄屏纵向堆叠需要 USS 断点或运行时切换类名。详见 [工作记录](Assets/Docs/PROJECT_LOG.md) 的 T7。
+- **窄窗口**：已实现代码驱动的 compact 断点（USS 无媒体查询，由 `GeometryChangedEvent` 切换类名），竖屏 600×1000 已实机验收，操作栏完整可见。详见 [工作记录](Assets/Docs/PROJECT_LOG.md) 的 T7 / T13。
 - **样本数量**：目前 8 个。若要展示更多经典结构（如 Gosper 滑翔机枪、繁殖者），
   `LifePatterns.All` 追加一项即可，测试会自动覆盖新条目。
+- **首次运行存在未解释的长帧**：一次未热身运行记录到单帧 86.9 秒，原因未知、后续未复现。
+  采样已改为先热身并丢弃，但根因未定位（T15）。
