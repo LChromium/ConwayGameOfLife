@@ -70,9 +70,20 @@ namespace ConwayGameOfLife
             string outputRoot = Path.Combine(Application.persistentDataPath, "layout-probe");
             Directory.CreateDirectory(outputRoot);
 
-            // Select the specimen to show. Defaults to the pulsar, the largest bundled pattern.
+            // Resolve the requested specimen up front and FAIL FAST if it cannot be resolved.
+            // Carrying on would either produce a screenshot of the wrong specimen (silently) or
+            // measurements attributed to the wrong one, and an automated caller would see exit 0.
             yield return null;
-            SelectSpecimen();
+
+            if (!TrySelectSpecimen(out string selectionError))
+            {
+                Debug.LogError($"[layout-probe] FAILED: {selectionError}");
+                Debug.LogError("[layout-probe] aborting without recording any measurement");
+
+                // Non-zero exit so a caller cannot mistake this for a successful capture.
+                Application.Quit(ProbeExitCodes.SelectionFailed);
+                yield break;
+            }
 
             // Let the terminal bootstrap and lay out, then measure.
             for (int i = 0; i < 90; i++)
@@ -82,6 +93,14 @@ namespace ConwayGameOfLife
                 {
                     break;
                 }
+            }
+
+            // The first attempt can run before the interface exists; retry once now that it does.
+            if (!specimenSelected && !TrySelectSpecimen(out selectionError))
+            {
+                Debug.LogError($"[layout-probe] FAILED: {selectionError}");
+                Application.Quit(ProbeExitCodes.SelectionFailed);
+                yield break;
             }
 
             // A few more frames so fonts and the first grid repaint are settled before capture.
@@ -123,7 +142,17 @@ namespace ConwayGameOfLife
             WriteRecord(outputRoot, shot, FindAttachedRoot(), genAfter - genBefore, compact);
 
             yield return new WaitForSeconds(0.5f);
-            Application.Quit(0);
+            Application.Quit(ProbeExitCodes.Success);
+        }
+
+        /// <summary>Process exit codes for the probe, so a caller can detect a failed capture.</summary>
+        internal static class ProbeExitCodes
+        {
+            /// <summary>Measurements and a screenshot were recorded.</summary>
+            public const int Success = 0;
+
+            /// <summary>The requested specimen does not exist, or no preset button matched it.</summary>
+            public const int SelectionFailed = 3;
         }
 
         private const int FrameRateCap = 120;
@@ -239,22 +268,26 @@ namespace ConwayGameOfLife
         /// <summary>
         /// Selects the specimen to display by pressing its real preset button. Uses the
         /// "-lifePattern" argument when given, otherwise the pulsar (the largest bundled pattern).
+        ///
+        /// Returns false with a reason when the specimen cannot be selected. The caller treats that
+        /// as fatal: recording a measurement attributed to the wrong specimen, or a screenshot of
+        /// one, would be worse than recording nothing.
         /// </summary>
-        private void SelectSpecimen()
+        private bool TrySelectSpecimen(out string error)
         {
             VisualElement root = FindAttachedRoot();
             if (root == null)
             {
-                Debug.LogWarning("[layout-probe] SelectSpecimen: no attached root yet");
-                return;
+                error = "no attached UIDocument root yet";
+                return false;
             }
 
             List<Button> presets = root.Query<Button>(className: "preset").ToList();
             if (presets.Count != LifePatterns.All.Length)
             {
-                Debug.LogWarning($"[layout-probe] SelectSpecimen: expected {LifePatterns.All.Length} preset " +
-                                 $"buttons but found {presets.Count}; archive not built yet");
-                return;
+                error = $"expected {LifePatterns.All.Length} preset buttons but found {presets.Count}; " +
+                        "the archive has not been built yet";
+                return false;
             }
 
             // Resolve the pattern to select.
@@ -264,25 +297,12 @@ namespace ConwayGameOfLife
             // version only checked whether the argument was non-empty and then walked a hard-coded
             // candidate list, so "-lifePattern GLIDER" silently selected the pentadecathlon - the
             // parameter looked like it worked while ignoring its value.
-            LifePattern pattern;
-            if (string.IsNullOrEmpty(requestedPattern))
+            string wantedName = string.IsNullOrEmpty(requestedPattern) ? "PULSAR" : requestedPattern;
+            LifePattern pattern = FindPatternByEnglishName(wantedName);
+            if (pattern == null)
             {
-                pattern = FindPatternByEnglishName("PULSAR");
-                if (pattern == null)
-                {
-                    Debug.LogWarning("[layout-probe] SelectSpecimen: PULSAR not found in the archive");
-                    return;
-                }
-            }
-            else
-            {
-                pattern = FindPatternByEnglishName(requestedPattern);
-                if (pattern == null)
-                {
-                    Debug.LogError($"[layout-probe] SelectSpecimen: unknown pattern '{requestedPattern}'. " +
-                                   $"Known names: {string.Join(", ", KnownEnglishNames())}");
-                    return;
-                }
+                error = $"unknown pattern '{wantedName}'. Known names: {string.Join(", ", KnownEnglishNames())}";
+                return false;
             }
 
             // The buttons are labelled "<chinese>\n<kind>", so match on the pattern's own Chinese name.
@@ -298,8 +318,8 @@ namespace ConwayGameOfLife
 
             if (target == null)
             {
-                Debug.LogError($"[layout-probe] SelectSpecimen: no preset button labelled '{pattern.Name}'");
-                return;
+                error = $"no preset button labelled '{pattern.Name}' ({pattern.EnglishName})";
+                return false;
             }
 
             using (NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled())
@@ -308,9 +328,17 @@ namespace ConwayGameOfLife
                 target.SendEvent(submit);
             }
 
+            if (target.ClassListContains("selected") == false)
+            {
+                error = $"pressed '{pattern.EnglishName}' but it did not become the selected specimen";
+                return false;
+            }
+
             specimenSelected = true;
+            error = null;
             Debug.Log($"[layout-probe] SelectSpecimen: selected {pattern.EnglishName} " +
                       $"('{target.text?.Replace("\n", "|")}')");
+            return true;
         }
 
         private static LifePattern FindPatternByEnglishName(string englishName)

@@ -214,7 +214,27 @@ Screenshots/                        # 真实 Player 截图与原始测量记录
 
 ---
 
-## 7. 已知边界与后续可做的事
+## 7. 归档清单（阶段一）
+
+本阶段可运行版本已归档。**完整信息见 [`Assets/Docs/StageArchive.md`](Assets/Docs/StageArchive.md)。**
+
+| 项 | 内容 |
+|---|---|
+| **版本位置** | Git 标签 `stage-1-life-terminal`（提交号用 `git describe --tags` 取，不写死在文档里）|
+| **Unity 版本** | 6000.6.0f1（URP 17.6.0 / 2D Renderer，StandaloneWindows64）|
+| **构建类型** | **Development Build** —— 探针受 `#if DEVELOPMENT_BUILD` 保护 |
+| **启动入口** | 编辑器：打开 `Assets/Scenes/SampleScene.unity` 按 Play（运行时空场景自举）<br>Player：`ConwayGameOfLife.EditorTools.PlayerBuild.BuildWindows64` 构建后运行 `Builds/LifeTerminal.exe` |
+| **测试报告** | EditMode **37/37**、PlayMode **13/13**（`test-results-*.xml` 随版本保存）|
+| **画面验收** | `Screenshots/` 下 5 张真实 Player 截图（1280×720 / 1920×1080 / 竖屏 / 两组长标题）|
+| **原始测量** | `Screenshots/player-measurements.jsonl`（帧成本）、`player-title-acceptance.jsonl`（标题）|
+| **保留问题** | T8 分项成本未测、T15 首次运行长帧（观察到与窗口失焦相关）、T5 无发布版构建 |
+
+> **阶段归档 ≠ 发布版性能验收。** 记录的是开发版构建；且「规则推进 / 网格重绘 / UI 布局」
+> 的分项成本**仍未测量**，因此**不指定优化方向**。
+
+---
+
+## 8. 已知边界与后续可做的事
 
 - **分项成本仍未测量**：规则推进本身很便宜（独立工具 0.206 ms/代），但「规则推进 / UI Toolkit 布局 / Painter2D 绘制」各占整帧多少**尚未测量**。因此**不指定优化方向**——在取得 Profiler 分项数据前，不实施 Burst / GPU / 位打包。若将来优化绘制，必须保留死细胞的网格底纹外观。
 - **环绕边界有性能代价**：实测取模运算使**吞吐下降 39.5%**（7,600 万 → 4,600 万格/秒），换算成**每代耗时增加 65.4%**。优化方式是"幽灵边框"（ghost border）而非逐邻居取模。
