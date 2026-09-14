@@ -21,12 +21,14 @@ namespace ConwayGameOfLife
         /// the stacked layout (which gives the grid the full panel width) is the better trade.</para>
         ///
         /// <para><b>How to compute the panel width.</b> With <c>ScaleWithScreenSize</c> and
-        /// MatchWidthOrHeight at 0.5, the fit scale is <c>(W/1600 + H/900) / 2</c>, so the visible
-        /// panel width is <c>W / scale</c>. Note this depends on both window dimensions and has
-        /// <b>no positive lower bound</b>: a narrow window yields a narrow panel (600x1000 gives
-        /// 807). An earlier comment here claimed the width depended only on window area and could
-        /// never fall below a fixed minimum - both were wrong, and a portrait capture disproved
-        /// them.</para>
+        /// MatchWidthOrHeight at 0.5, the fit scale is <c>(W/1600 + H/900) / 2</c>, so with aspect
+        /// ratio <c>a = W/H</c>:
+        /// <code>panelW = W / scale = 2880a / (1.8a + 1)</code>
+        /// This depends <b>only on the aspect ratio, not on the window's absolute size</b>
+        /// (400x400 and 4000x4000 both give 1152; 600x1000 gives 807.5), and it is
+        /// <b>unbounded below</b> - a narrow enough window drives it toward zero. Earlier comments
+        /// here claimed the width depended only on window area and had a floor of 1152; both were
+        /// wrong, and the portrait capture disproved them.</para>
         /// </summary>
         private const float DesignWidth = 1280f;
 

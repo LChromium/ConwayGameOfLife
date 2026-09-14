@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -22,7 +23,17 @@ namespace ConwayGameOfLife
     {
         private const string CommandLineFlag = "-lifeLayoutProbe";
 
+        /// <summary>
+        /// Optional "-lifePattern &lt;ENGLISH_NAME&gt;" argument so a capture can select a specific
+        /// specimen. Used to check that the longest name still fits the screen-bar title instead of
+        /// being silently clipped - the archive list fitting it is a different claim.
+        /// </summary>
+        private const string PatternArgument = "-lifePattern";
+
         private static bool enabledByCommandLine;
+        private static string requestedPattern;
+        private static bool patternArgumentPending;
+        private bool specimenSelected;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Detect()
@@ -33,7 +44,15 @@ namespace ConwayGameOfLife
                 if (arg == CommandLineFlag)
                 {
                     enabledByCommandLine = true;
-                    break;
+                }
+                else if (arg == PatternArgument)
+                {
+                    patternArgumentPending = true;
+                }
+                else if (patternArgumentPending)
+                {
+                    requestedPattern = arg;
+                    patternArgumentPending = false;
                 }
             }
 
@@ -51,10 +70,9 @@ namespace ConwayGameOfLife
             string outputRoot = Path.Combine(Application.persistentDataPath, "layout-probe");
             Directory.CreateDirectory(outputRoot);
 
-            // Load a large, non-trivial specimen so the screenshot shows the largest pattern the
-            // archive contains (a 13x13 pulsar) rather than a three-cell blinker.
+            // Select the specimen to show. Defaults to the pulsar, the largest bundled pattern.
             yield return null;
-            LoadPulsarIfAvailable();
+            SelectSpecimen();
 
             // Let the terminal bootstrap and lay out, then measure.
             for (int i = 0; i < 90; i++)
@@ -65,8 +83,6 @@ namespace ConwayGameOfLife
                     break;
                 }
             }
-
-            LoadPulsarIfAvailable();
 
             // A few more frames so fonts and the first grid repaint are settled before capture.
             for (int i = 0; i < 20; i++)
@@ -221,30 +237,58 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Selects the pulsar through its real preset button so the capture shows the largest
-        /// bundled specimen. Falls back silently if the interface is not up yet.
+        /// Selects the specimen to display by pressing its real preset button. Uses the
+        /// "-lifePattern" argument when given, otherwise the pulsar (the largest bundled pattern).
         /// </summary>
-        private void LoadPulsarIfAvailable()
+        private void SelectSpecimen()
         {
             VisualElement root = FindAttachedRoot();
             if (root == null)
             {
+                Debug.LogWarning("[layout-probe] SelectSpecimen: no attached root yet");
                 return;
             }
 
-            foreach (Button button in root.Query<Button>(className: "preset").ToList())
+            // Names as they appear in the button captions ("<chinese>\n<kind>").
+            // "-lifePattern PENTADECATHLON" selects the longest specimen name for title checks.
+            string[] candidates = string.IsNullOrEmpty(requestedPattern)
+                ? new[] { "脉冲星" }
+                : new[] { "十五周期振荡器", "轻型飞船", "闪烁器", "滑翔机", "脉冲星", "蜂巢", "方块", "蟾蜍" };
+
+            List<Button> presets = root.Query<Button>(className: "preset").ToList();
+            Debug.Log($"[layout-probe] SelectSpecimen: requested='{requestedPattern ?? "(default)"}' " +
+                      $"presetButtons={presets.Count}");
+
+            var seen = new StringBuilder();
+            foreach (Button button in presets)
             {
-                if (button.text != null && button.text.Contains("脉冲星") && !button.ClassListContains("selected"))
+                seen.Append('[').Append(button.text?.Replace("\n", "|")).Append(']');
+            }
+
+            Debug.Log($"[layout-probe] SelectSpecimen: captions={seen}");
+
+            foreach (string candidate in candidates)
+            {
+                foreach (Button button in presets)
                 {
+                    if (button.text == null || !button.text.Contains(candidate))
+                    {
+                        continue;
+                    }
+
                     using (NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled())
                     {
                         submit.target = button;
                         button.SendEvent(submit);
                     }
 
+                    specimenSelected = true;
+                    Debug.Log($"[layout-probe] SelectSpecimen: pressed '{candidate}' (caption '{button.text?.Replace("\n", "|")}')");
                     return;
                 }
             }
+
+            Debug.LogWarning("[layout-probe] SelectSpecimen: no candidate matched any preset caption");
         }
 
         private static VisualElement FindAttachedRoot()
@@ -314,6 +358,37 @@ namespace ConwayGameOfLife
                 // The grid height is in PANEL UNITS (design space), not physical pixels.
                 VisualElement grid = root.Q(className: "life-grid");
                 sb.Append($"\"gridHeightPanelUnits\":{(grid != null ? grid.worldBound.height : 0f):F2},");
+
+                // The screen-bar specimen caption is the longest text in the interface when the
+                // pentadecathlon is selected. Record it with its measured and preferred widths so
+                // "does the title fit?" is answered by a number, not by squinting at a screenshot.
+                VisualElement screenBar = root.Q(className: "screen-bar");
+                Label caption = null;
+                if (screenBar != null)
+                {
+                    foreach (VisualElement element in screenBar.Query<VisualElement>(className: "micro").ToList())
+                    {
+                        if (element is Label label &&
+                            (label.text.StartsWith("样本 ") || label.text.StartsWith("自由样本")))
+                        {
+                            caption = label;
+                            break;
+                        }
+                    }
+                }
+
+                if (caption != null)
+                {
+                    float measured = caption.MeasureTextSize(
+                        caption.text, 0f, VisualElement.MeasureMode.Undefined,
+                        0f, VisualElement.MeasureMode.Undefined).x;
+
+                    sb.Append($"\"captionText\":\"{caption.text.Replace("\\", "/").Replace("\"", "'")}\",");
+                    sb.Append($"\"captionTextLength\":{caption.text.Length},");
+                    sb.Append($"\"captionBoxWidth\":{caption.worldBound.width:F2},");
+                    sb.Append($"\"captionPreferredWidth\":{measured:F2},");
+                    sb.Append($"\"captionClipped\":{((measured > caption.worldBound.width + 0.5f) && !caption.style.whiteSpace.ToString().Contains("Normal")).ToString().ToLowerInvariant()},");
+                }
 
                 VisualElement display = root.Q(className: "display");
                 VisualElement library = root.Q(className: "library");
