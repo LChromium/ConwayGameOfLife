@@ -105,7 +105,7 @@ dotnet run --project .verify/Verify.csproj -c Release -- selftest        # 证�
 
 ---
 
-## 4. 画面验收与实机测量
+## 4. 开发环境说明
 
 ### 网络代理（本机配置，不属于项目）
 
@@ -132,12 +132,12 @@ git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 `
 | 项 | 版本 / 说明 |
 |---|---|
 | Unity Editor | 6000.6.0f1（含 Windows Build Support 模块，生成 Player 截图时需要）|
-| .NET SDK | 8.0+（运行 `Assets/../.verify` 独立校验工具）|
+| .NET SDK | 8.0+（运行 `.verify` 独立校验工具）|
 | 可选 | 本机代理，仅在直连 GitHub 失败时用于推送 |
 
 ---
 
-## 5. 项目结构
+## 5. 画面验收与实机测量
 
 `Screenshots/` 是从**真实 Windows Player 构建**中捕获的画面与测量数据，用于确认响应式布局与可读性。
 PlayMode 测试宿主固定在 640×480，无法代表目标分辨率，因此这部分必须由 Player 产出。
