@@ -14,55 +14,51 @@ using Debug = UnityEngine.Debug;
 namespace ConwayGameOfLife
 {
     /// <summary>
-    /// Stage-C large-board benchmark. Activated with "-lifeBench" together with
-    /// "-lifeBoard WxH"; measures the board the Player was launched with, appends one
-    /// JSON line to <c>stage-c-bench.jsonl</c> and quits. One process per board size,
-    /// so each size gets a fresh allocator and a fresh peak, which is the only way a
-    /// memory figure for a size means anything.
+    /// Stage-C large-board benchmark, round 2. Activated with "-lifeBench" together with
+    /// "-lifeBoard WxH"; measures the board the Player was launched with, appends one JSON
+    /// line to <c>stage-c-bench-r2.jsonl</c> and quits. One process per board size, so each
+    /// size gets a fresh allocator and a fresh peak, which is the only way a memory figure
+    /// for a size means anything.
     ///
     /// <para><b>Five axes, recorded separately and never summed into one number.</b>
-    /// Stage A refused to attribute a frame to its parts without per-part data; this
-    /// probe is that data, so blurring it back together would waste the exercise.</para>
+    /// Stage A refused to attribute a frame to its parts without per-part data; this probe
+    /// is that data, so blurring it back together would waste the exercise.</para>
     ///
     /// <list type="bullet">
-    /// <item><b>generate</b> -- <see cref="LifeNoiseSeeding.Generate"/> for fBm and for
-    /// uniform, Stopwatch around the call. Pure managed compute, so the number IS the
-    /// CPU generation cost. Excludes upload, evolution and display.</item>
-    /// <item><b>upload</b> -- <c>ILifeBackend.LoadBoard</c>. On the GPU that is the
-    /// staging copy plus <c>ComputeBuffer.SetData</c>, which returns once the data is
-    /// handed over: it is NOT a transfer-complete time. On the CPU it is the app's real
-    /// load path (a call per live cell, so population stays incremental).</item>
-    /// <item><b>evolution</b> -- CPU steps, GPU steps submitted without synchronisation,
-    /// and GPU steps followed by a full readback. The last one is an upper bound that
-    /// contains submit plus execution plus sync overhead, and is labelled as such.
-    /// <b>No CPU/GPU speed ratio is derived from any of these.</b></item>
-    /// <item><b>display</b> -- the repaint path (<c>LifeGridElement.Refresh</c>, i.e. the
-    /// render dispatch plus the background assignment), the CPU backend's readback and
-    /// upload for a repaint (the GPU backend has no such cost: the kernel reads the live
-    /// buffer), real frame deltas with vsync off, frame timings from
-    /// <see cref="FrameTimingManager"/> where the platform provides them, and the
-    /// viewport facts -- how much of the board is actually on screen.</item>
-    /// <item><b>memory</b> -- measured deltas for allocating one more board at this size
-    /// (managed heap and graphics driver separately) plus the computed per-buffer
-    /// breakdown, so the numbers can be checked against the source.</item>
+    /// <item><b>generate</b> -- <see cref="LifeNoiseSeeding.Generate"/>, Stopwatch around the
+    /// call. Pure managed compute, so the number IS the CPU generation cost.</item>
+    /// <item><b>upload</b> -- <c>ILifeBackend.LoadBoard</c>. On the GPU that is the staging
+    /// copy plus <c>ComputeBuffer.SetData</c>, which returns once the data is handed over:
+    /// NOT a transfer-complete time. On the CPU it is the app's real load path.</item>
+    /// <item><b>evolution</b> -- CPU steps; GPU steps submitted without synchronisation; and
+    /// a batch of <see cref="BatchSteps"/> GPU steps followed by one full readback, divided by
+    /// the batch size. That last one is an <b>amortised</b> figure whose readback share is not
+    /// decomposed, and the batch size is the same at every board size so the trend across
+    /// sizes compares like with like. <b>No CPU/GPU speed ratio is derived.</b></item>
+    /// <item><b>display</b> -- the repaint dispatch, the cost of the CPU backend's board copy
+    /// and upload, and four <b>separately labelled</b> frame scenarios, each with its own
+    /// frame-timing samples and valid-sample counts: paused, paused with a forced repaint
+    /// every frame, normal evolution, and normal evolution on the CPU backend.</item>
+    /// <item><b>memory</b> -- the capacity of the buffers this probe enumerates (from the
+    /// source), the measured graphics-driver delta for one more board, and the difference
+    /// between them marked <b>unattributed</b>. No internal split is claimed, because the
+    /// measurement cannot see one.</item>
     /// </list>
     ///
-    /// <para>Deliberately self-contained: it does not share its twenty-line statistics
-    /// helper with the archived stage-A probe, because editing that probe would
-    /// invalidate stage A's published numbers.</para>
+    /// <para>Deliberately self-contained: it does not share its statistics helper with the
+    /// archived stage-A probe, because editing that probe would invalidate stage A's
+    /// published numbers.</para>
     /// </summary>
     public sealed class LifeBoardBench : MonoBehaviour
     {
-        /// <summary>Board the stage-B reproduction command uses, so generation figures are comparable.</summary>
-        private static readonly LifeNoiseParameters FbmParameters =
-            new(LifeSeedingMode.Fbm, 20260915, 0.32f, 60f, 10f, 0.7f);
+        /// <summary>Round of the measurement contract that produced a record.</summary>
+        private const int RecordRound = 2;
 
         /// <summary>
-        /// True when this player reported frame timings at all. Recorded per line, because a
-        /// reader has to be able to tell which configuration a GPU frame time came from
-        /// without trusting a filename.
+        /// Board the stage-B reproduction command uses, so generation figures are comparable.
         /// </summary>
-        private bool frameTimingStatsReported;
+        private static readonly LifeNoiseParameters FbmParameters =
+            new(LifeSeedingMode.Fbm, 20260915, 0.32f, 60f, 10f, 0.7f);
 
         private static readonly LifeNoiseParameters UniformParameters =
             new(LifeSeedingMode.Uniform, 20260915, 0.32f, 48f, 0f, 0f);
@@ -70,8 +66,23 @@ namespace ConwayGameOfLife
         private const int RandomSeed = 20260915;
         private const double Density = 0.30;
 
+        /// <summary>
+        /// Steps per batch for the amortised GPU figure. Uniform across board sizes on
+        /// purpose: with a size-dependent batch the readback (one per batch) would weigh
+        /// more heavily on the large boards and the across-size trend would partly be an
+        /// artefact of the batch size.
+        /// </summary>
+        private const int BatchSteps = 5;
+
         private static string F(double value) => value.ToString("F4", CultureInfo.InvariantCulture);
         private static string Bool(bool value) => value ? "true" : "false";
+
+        /// <summary>
+        /// True when this player reported frame timings at all. Recorded per line, because a
+        /// reader has to be able to tell which configuration a GPU frame time came from
+        /// without trusting a filename.
+        /// </summary>
+        private bool frameTimingStatsReported;
 
         /// <summary>
         /// Wall-clock cost of one phase, logged as it finishes. A benchmark that only
@@ -81,8 +92,8 @@ namespace ConwayGameOfLife
         /// <para>Focus is logged with it on purpose. A standalone player stops running when
         /// its window loses focus (<c>Application.runInBackground</c> is false by default),
         /// and a phase that straddles such a pause reports a wall-clock time of minutes
-        /// while every measurement inside it stays fast. That exact shape was observed
-        /// here, and it is recorded rather than silently averaged away.</para>
+        /// while every measurement inside it stays fast. That exact shape was observed, and
+        /// it is recorded rather than silently averaged away.</para>
         /// </summary>
         private static void Phase(string name, ref double startedAt)
         {
@@ -167,10 +178,19 @@ namespace ConwayGameOfLife
             gridRef = grid;
             Debug.Log($"[stage-c-bench] {width}x{height} ({cells} cells), active backend {active.Name}");
 
-            // The starting board is always a plain fixed random one: generation is
-            // measured separately below, and every other axis must be comparable across
-            // board sizes without a noise field in the picture.
+            // The starting board for every measurement below is a plain fixed random one:
+            // generation is measured separately, and the other axes must be comparable
+            // across board sizes without a noise field in the picture.
             byte[] board = BuildFixedBoard(cells);
+
+            // The cross-frame scenarios run THIS board on the ACTIVE backend. Round 1 loaded
+            // it only into the temporary measurement backends, so the live board was still
+            // the default specimen while the record claimed a random density-0.30 start.
+            active.WrapEdges = true;
+            active.LoadBoard(board);
+            string boardIdentifiedAs =
+                $"fixed random seed {RandomSeed} density {F(Density)}, loaded into the active backend " +
+                "before the frame scenarios, wrap boundary, generation reset to 0";
 
             Generation fbm = MeasureGeneration(FbmParameters, width, height);
             Phase("generate-fbm", ref phaseStartedAt);
@@ -196,17 +216,16 @@ namespace ConwayGameOfLife
             Phase("evolution-gpu-submit", ref phaseStartedAt);
             yield return null;
 
-            Stats gpuSynced = MeasureGpuRules(board, width, height, cells, synchronise: true);
-            Phase("evolution-gpu-sync", ref phaseStartedAt);
+            Stats gpuBatch = MeasureGpuRules(board, width, height, cells, synchronise: true);
+            Phase("evolution-gpu-batch-readback", ref phaseStartedAt);
             yield return null;
 
             DisplayFacts display = MeasureDisplay(grid, board, width, height, cells);
-            Phase("display-refresh", ref phaseStartedAt);
+            Phase("display-fixed-costs", ref phaseStartedAt);
             yield return null;
 
-            // Frame deltas with vsync off, so the interval describes work rather than the
-            // display refresh. Sampled paused and running: the difference is the cost of a
-            // repaint per generation.
+            // Frame scenarios. vsync off and uncapped, so the interval describes work rather
+            // than pacing -- and is still not a pure compute cost.
             int configuredVSync = QualitySettings.vSyncCount;
             int configuredTargetFrameRate = Application.targetFrameRate;
             QualitySettings.vSyncCount = 0;
@@ -215,32 +234,81 @@ namespace ConwayGameOfLife
                 yield return null;
 
             bool wasRunning = SetRunning(controller, false);
-            yield return MeasureFrames(active, cells, Repaint.None, budgetSeconds: 0.4f, minGenerations: 0);
-            Stats idleFrames = lastFrames;
-            float idleFps = lastFramesPerSecond;
-
-            yield return MeasureFrames(active, cells, Repaint.EveryFrame, budgetSeconds: 0.4f, minGenerations: 0);
-            Stats repaintFrames = lastFrames;
-            float repaintFps = lastFramesPerSecond;
-            Phase("display-frames-idle-and-repaint", ref phaseStartedAt);
-
-            // The running case has to actually evolve, or the interval says nothing about
-            // the app: the clock goes to the UI's maximum rate and the window stays open
-            // until at least five generations have gone by.
             int requestedGenerationsPerSecond = SetSpeed(controller, 20);
+
+            var scenarios = new List<ScenarioResult>();
+
+            // 1. paused, nothing changes.
+            active.LoadBoard(board);
+            yield return MeasureScenario(scenarios, "paused", active, cells, requestedGenerationsPerSecond,
+                Repaint.None, budgetSeconds: 0.4f, minGenerations: 0, captureFrameTimings: true);
+            Phase("scenario-paused", ref phaseStartedAt);
+
+            // 2. paused with a forced repaint every frame. A deliberate stress case, not
+            //    what the application does.
+            active.LoadBoard(board);
+            yield return MeasureScenario(scenarios, "paused-forced-repaint-every-frame", active, cells,
+                requestedGenerationsPerSecond, Repaint.EveryFrame, budgetSeconds: 0.4f,
+                minGenerations: 0, captureFrameTimings: true);
+            Phase("scenario-paused-forced-repaint", ref phaseStartedAt);
+
+            // 3. normal evolution: the clock runs and the application repaints once per
+            //    generation by itself. No extra forced repaint here -- round 1 added one and
+            //    then described the result as the normal path.
+            active.LoadBoard(board);
             SetRunning(controller, true);
             yield return null;
-            yield return MeasureFrames(active, cells, Repaint.EveryFrame, budgetSeconds: 2.0f, minGenerations: 5);
-            Stats runningFrames = lastFrames;
-            float runningFps = lastFramesPerSecond;
-            int advanced = lastFrameGenerationDelta;
-            float achievedGenerationsPerSecond = lastGenerationsPerSecond;
-            Phase("display-frames-running", ref phaseStartedAt);
-
+            yield return MeasureScenario(scenarios, "running", active, cells, requestedGenerationsPerSecond,
+                Repaint.None, budgetSeconds: 2.0f, minGenerations: 5, captureFrameTimings: true);
+            Phase("scenario-running", ref phaseStartedAt);
             SetRunning(controller, false);
-            yield return FrameTimings(120);
-            FrameStats timings = lastTimings;
-            Phase("display-frame-timings", ref phaseStartedAt);
+
+            // 4. normal evolution on the CPU backend: the configuration where the display
+            //    path has to copy and upload the whole board after every change.
+            //
+            //    The requested rate is NOT 20 here, and that is a measurement decision, not
+            //    politeness. A CPU generation at 2048x2048 costs ~151 ms against a 50 ms clock
+            //    interval, so the controller's catch-up loop (Update: while accumulator >=
+            //    interval) adds generations faster than it can retire them: the debt grows
+            //    inside a single frame, the main thread never returns, and the player hangs.
+            //    That was observed twice (a 318 s crash and a 600 s timeout) before this line
+            //    existed, and no coroutine can cut it short because the main thread is inside
+            //    the loop. The scenario therefore asks for a rate the backend can sustain and
+            //    reports the rate it asked for.
+            int cpuRate = SustainableRate(cpuRules);
+            SetSpeed(controller, cpuRate);
+            Phase("cpu-backend-switch-enter", ref phaseStartedAt);
+            if (SwitchBackend(controller, gpu: false))
+            {
+                Phase("cpu-backend-switch-done", ref phaseStartedAt);
+                ILifeBackend cpu = grid.Backend;
+                if (cpu != null && cpu.Width == width && cpu.Height == height)
+                {
+                    cpu.WrapEdges = true;
+                    cpu.LoadBoard(board);
+                    Phase("cpu-backend-board-loaded", ref phaseStartedAt);
+
+                    SetRunning(controller, true);
+                    yield return null;
+                    Phase("cpu-backend-first-frame", ref phaseStartedAt);
+
+                    yield return MeasureScenario(scenarios, "running-cpu-backend", cpu, cells, cpuRate,
+                        Repaint.None, budgetSeconds: 2.0f, minGenerations: 1, captureFrameTimings: true);
+                    Phase("scenario-running-cpu-backend", ref phaseStartedAt);
+                    SetRunning(controller, false);
+                }
+
+                SwitchBackend(controller, gpu: true);
+                Phase("cpu-backend-switch-back", ref phaseStartedAt);
+                active = grid.Backend;
+                if (active != null)
+                    active.LoadBoard(board);
+            }
+            else
+            {
+                Debug.LogWarning("[stage-c-bench] could not switch to the CPU backend; " +
+                                 "the CPU-backend frame scenario was not measured");
+            }
 
             QualitySettings.vSyncCount = configuredVSync;
             Application.targetFrameRate = configuredTargetFrameRate;
@@ -253,11 +321,9 @@ namespace ConwayGameOfLife
             bool focusedAtEnd = Application.isFocused;
             Application.runInBackground = configuredRunInBackground;
 
-            WriteLine(width, height, cells, active.Name, fbm, uniform, cpuLoad, gpuLoad,
-                cpuRules, gpuSubmit, gpuSynced, display, idleFrames, idleFps, repaintFrames,
-                repaintFps, runningFrames, runningFps, advanced, achievedGenerationsPerSecond,
-                requestedGenerationsPerSecond, timings, memory, configuredVSync,
-                configuredTargetFrameRate, focusedAtStart && focusedAtEnd,
+            WriteLine(width, height, cells, active?.Name ?? "unknown", boardIdentifiedAs, fbm, uniform,
+                cpuLoad, gpuLoad, cpuRules, gpuSubmit, gpuBatch, display, scenarios, memory,
+                configuredVSync, configuredTargetFrameRate, focusedAtStart && focusedAtEnd,
                 Time.realtimeSinceStartup - startedAt);
 
             Application.Quit(0);
@@ -337,21 +403,26 @@ namespace ConwayGameOfLife
                 backend.Step();
 
             int repeats = RepeatsFor(cells);
-            int steps = StepsFor(cells);
             var samples = new List<double>(repeats);
 
             for (int repeat = 0; repeat < repeats; repeat++)
             {
                 var watch = Stopwatch.StartNew();
-                for (int i = 0; i < steps; i++)
+                for (int i = 0; i < BatchSteps; i++)
                     backend.Step();
                 watch.Stop();
-                samples.Add(watch.Elapsed.TotalMilliseconds / steps);
+                samples.Add(watch.Elapsed.TotalMilliseconds / BatchSteps);
             }
 
             return Stats.From(samples);
         }
 
+        /// <summary>
+        /// GPU rule advance. <paramref name="synchronise"/> false is submit-only. True is a
+        /// batch of <see cref="BatchSteps"/> dispatches followed by ONE full readback, divided
+        /// by the batch size: an amortised figure, not a per-generation execution time, and
+        /// the readback's share of it is not measured.
+        /// </summary>
         private static Stats MeasureGpuRules(byte[] board, int width, int height, int cells, bool synchronise)
         {
             if (!GpuLifeBackend.TryCreate(width, height, out GpuLifeBackend backend, out string error))
@@ -373,20 +444,19 @@ namespace ConwayGameOfLife
                     backend.TryReadAllCells(sink);
 
                 int repeats = RepeatsFor(cells);
-                int steps = StepsFor(cells);
                 var samples = new List<double>(repeats);
 
                 for (int repeat = 0; repeat < repeats; repeat++)
                 {
                     var watch = Stopwatch.StartNew();
-                    for (int i = 0; i < steps; i++)
+                    for (int i = 0; i < BatchSteps; i++)
                         backend.Step();
 
                     if (synchronise)
                         backend.TryReadAllCells(sink);
 
                     watch.Stop();
-                    samples.Add(watch.Elapsed.TotalMilliseconds / steps);
+                    samples.Add(watch.Elapsed.TotalMilliseconds / BatchSteps);
                 }
 
                 return Stats.From(samples);
@@ -398,7 +468,7 @@ namespace ConwayGameOfLife
         private sealed class DisplayFacts
         {
             public Stats Refresh;
-            public Stats CpuRepaintUpload;
+            public Stats CpuBoardCopyAndUpload;
             public int ViewportWidth;
             public int ViewportHeight;
             public int CellPixels;
@@ -414,7 +484,7 @@ namespace ConwayGameOfLife
         {
             var facts = new DisplayFacts();
 
-            // The repaint path exactly as the frame loop calls it.
+            // The repaint dispatch, exactly as the frame loop calls it.
             if (grid != null)
             {
                 for (int i = 0; i < 5; i++)
@@ -460,10 +530,14 @@ namespace ConwayGameOfLife
                                           (long)height * facts.CellPixels <= facts.ViewportHeight;
             }
 
-            // The CPU backend's repaint cost: a full-board readback plus the upload into the
-            // display buffer. The GPU backend has none of this -- the render kernel reads its
-            // live buffer -- so it is measured on a CPU board of the same size whatever the
-            // Player was launched with, rather than reported as zero and forgotten.
+            // The component cost of the CPU backend's display path: a managed copy into the
+            // upload scratch (with 0/1 normalisation) plus ComputeBuffer.SetData.
+            //
+            // Scope, because round 1 overstated it: this is a CPU-side array read, not a
+            // GPU-to-CPU transfer, and the grid runs it only when the board has changed AND
+            // the CPU backend is active -- LifeGridElement gates it on uploadPending, so
+            // panning, zooming or a plain Refresh do not trigger it. The scenario
+            // "running-cpu-backend" below measures the same path in place, through the grid.
             if (renderer != null)
             {
                 using var cpu = new CpuLifeBackend(width, height);
@@ -480,7 +554,7 @@ namespace ConwayGameOfLife
                     samples.Add(watch.Elapsed.TotalMilliseconds);
                 }
 
-                facts.CpuRepaintUpload = Stats.From(samples);
+                facts.CpuBoardCopyAndUpload = Stats.From(samples);
             }
 
             return facts;
@@ -497,10 +571,7 @@ namespace ConwayGameOfLife
             return field?.GetValue(grid) as LifeBoardRenderer;
         }
 
-        private Stats lastFrames;
-        private float lastFramesPerSecond;
-        private int lastFrameGenerationDelta;
-        private float lastGenerationsPerSecond;
+        private LifeGridElement gridRef;
 
         private enum Repaint
         {
@@ -508,99 +579,204 @@ namespace ConwayGameOfLife
             EveryFrame,
         }
 
-        /// <summary>
-        /// Samples real frame deltas for one scenario. The window is bounded by a wall-clock
-        /// budget, a frame cap and -- for the running case -- a minimum number of
-        /// generations: without that last bound a fast board fits its whole frame budget
-        /// into a few milliseconds and the sample reports a frame interval for a board that
-        /// never advanced.
-        /// </summary>
-        private IEnumerator MeasureFrames(
-            ILifeBackend active, int cells, Repaint repaint, float budgetSeconds, int minGenerations)
+        /// <summary>One cross-frame scenario, with everything needed to read its numbers.</summary>
+        private sealed class ScenarioResult
         {
+            public string Name;
+            public string Backend;
+            public string Board;
+            public bool ForcedRepaint;
+            public int RequestedGenerationsPerSecond;
+            public int StartGeneration;
+            public int GenerationsAdvanced;
+            public Stats Frames;
+            public float FramesPerSecond;
+            public float GenerationsPerSecond;
+            public double FirstDecileFrameMedianMs;
+            public double LastDecileFrameMedianMs;
+            public bool CutOffBySafetyCap;
+            public int FramesWithGridUpload;
+            public Stats GridReportedUploadMs;
+            public Stats GpuFrameMs;
+            public Stats CpuFrameMs;
+            public int RequestedFrameTimingFrames;
+            public int ValidGpuFrameTimingSamples;
+            public int ValidCpuFrameTimingSamples;
+            public string Note;
+        }
+
+        /// <summary>Frames sampled per scenario before the wall-clock budget can end it.</summary>
+        private static int FrameSamplesFor(int cells) => cells <= 1 << 22 ? 120 : 40;
+
+        /// <summary>
+        /// Hard ceiling on one scenario's wall clock. See the note in the sampling loop: it
+        /// cannot rescue a frame that never returns, only a scenario that keeps progressing.
+        /// </summary>
+        private const float SafetyCapSeconds = 20f;
+
+        /// <summary>
+        /// Median of the first or last tenth of the samples, in time order (the samples list
+        /// is not sorted until <see cref="Stats.From"/> runs, which is why this is called
+        /// first). Shows whether an interval grew during the window.
+        /// </summary>
+        private static double DecileMedian(List<double> samples, bool fromEnd)
+        {
+            int slice = Math.Max(1, samples.Count / 10);
+            int start = fromEnd ? samples.Count - slice : 0;
+            var window = new List<double>(slice);
+            for (int i = start; i < start + slice && i < samples.Count; i++)
+                window.Add(samples[i]);
+
+            return Stats.From(window).Median;
+        }
+
+        /// <summary>
+        /// A generation rate the CPU backend can actually retire at this board size. The
+        /// controller's clock runs at the slider's rate and its catch-up loop adds generations
+        /// faster than a slow step can retire them, so asking for more than the backend can do
+        /// does not produce a slow frame rate -- it produces a frame that never ends.
+        /// </summary>
+        private static int SustainableRate(Stats cpuStepMs)
+        {
+            if (cpuStepMs == null || cpuStepMs.Median <= 0.0)
+                return 1;
+
+            // Half the theoretical maximum, so a step always finishes inside its interval.
+            int rate = (int)(1000.0 / (2.0 * cpuStepMs.Median));
+            return Math.Clamp(rate, 1, 20);
+        }
+
+        /// <summary>
+        /// Runs one scenario and samples everything about it in the same window: frame
+        /// deltas, how many generations actually went by, the upload cost the grid itself
+        /// reported, and frame timings.
+        ///
+        /// <para>The window is bounded by a wall-clock budget, a frame cap and -- for running
+        /// scenarios -- a minimum number of generations: without that last bound a fast board
+        /// fits its whole budget into a few milliseconds and the sample reports a frame
+        /// interval for a board that never advanced.</para>
+        /// </summary>
+        private IEnumerator MeasureScenario(
+            List<ScenarioResult> results, string name, ILifeBackend backend, int cells,
+            int requestedRate, Repaint repaint, float budgetSeconds, int minGenerations,
+            bool captureFrameTimings)
+        {
+            var result = new ScenarioResult
+            {
+                Name = name,
+                Backend = backend.Name,
+                Board = $"{backend.Width}x{backend.Height}",
+                ForcedRepaint = repaint == Repaint.EveryFrame,
+                RequestedGenerationsPerSecond = requestedRate,
+                StartGeneration = backend.Generation,
+            };
+
             int maxFrames = minGenerations > 0 ? 200000 : FrameSamplesFor(cells);
-            int startGeneration = active.Generation;
             double startedAt = Time.realtimeSinceStartup;
+            var samples = new List<double>(Math.Min(maxFrames, 8192));
+            var uploads = new List<double>();
+            var timings = new FrameTiming[Math.Min(maxFrames, 200)];
 
             // One discarded frame so the first sample is not the frame that started this.
             yield return null;
 
-            var samples = new List<double>(Math.Min(maxFrames, 8192));
             for (int i = 0; i < maxFrames; i++)
             {
                 if (repaint == Repaint.EveryFrame)
                     gridRef?.MarkBoardDirty();
 
+                if (captureFrameTimings)
+                    FrameTimingManager.CaptureFrameTimings();
+
                 yield return null;
+
                 samples.Add(Time.unscaledDeltaTime * 1000.0);
 
+                // The production path reports its own upload cost; zero means it did not
+                // upload on that frame (which is the normal case on the GPU backend).
+                if (gridRef != null && gridRef.LastUploadMilliseconds > 0f)
+                {
+                    result.FramesWithGridUpload++;
+                    uploads.Add(gridRef.LastUploadMilliseconds);
+                }
+
                 bool windowOver = Time.realtimeSinceStartup - startedAt >= budgetSeconds && samples.Count >= 10;
-                bool enoughGenerations = active.Generation - startGeneration >= minGenerations;
-                if (windowOver && enoughGenerations)
+                bool enoughGenerations = backend.Generation - result.StartGeneration >= minGenerations;
+
+                // Safety cap. It bounds the SCENARIO, not the application: if a frame itself
+                // never returns (the catch-up spiral described in Run), no coroutine can cut
+                // it short. It is here so a slow-but-progressing scenario still terminates,
+                // and it says so in the record when it fires.
+                bool cutOff = Time.realtimeSinceStartup - startedAt >= SafetyCapSeconds;
+                result.CutOffBySafetyCap = cutOff;
+
+                if (cutOff || (windowOver && enoughGenerations))
                     break;
             }
 
-            lastFrames = Stats.From(samples);
-            lastFrameGenerationDelta = active.Generation - startGeneration;
+            result.Frames = Stats.From(samples);
+
+            // Escalation evidence: if the interval grows from the start of the window to the
+            // end, the record shows it rather than hiding it behind one median.
+            result.FirstDecileFrameMedianMs = DecileMedian(samples, fromEnd: false);
+            result.LastDecileFrameMedianMs = DecileMedian(samples, fromEnd: true);
+            result.GenerationsAdvanced = backend.Generation - result.StartGeneration;
 
             double elapsed = Time.realtimeSinceStartup - startedAt;
-            lastFramesPerSecond = elapsed > 0.0 ? (float)(samples.Count / elapsed) : 0f;
-            lastGenerationsPerSecond = elapsed > 0.0 ? (float)(lastFrameGenerationDelta / elapsed) : 0f;
+            result.FramesPerSecond = elapsed > 0.0 ? (float)(samples.Count / elapsed) : 0f;
+            result.GenerationsPerSecond = elapsed > 0.0
+                ? (float)(result.GenerationsAdvanced / elapsed)
+                : 0f;
+
+            if (uploads.Count > 0)
+                result.GridReportedUploadMs = Stats.From(uploads);
+
+            if (captureFrameTimings)
+            {
+                result.RequestedFrameTimingFrames = timings.Length;
+                uint captured = FrameTimingManager.GetLatestTimings((uint)timings.Length, timings);
+                var cpu = new List<double>();
+                var gpu = new List<double>();
+                for (int i = 0; i < captured && i < timings.Length; i++)
+                {
+                    if (timings[i].cpuFrameTime > 0.0)
+                        cpu.Add(timings[i].cpuFrameTime);
+
+                    if (timings[i].gpuFrameTime > 0.0)
+                        gpu.Add(timings[i].gpuFrameTime);
+                }
+
+                if (cpu.Count > 0)
+                    result.CpuFrameMs = Stats.From(cpu);
+
+                if (gpu.Count > 0)
+                    result.GpuFrameMs = Stats.From(gpu);
+
+                result.ValidCpuFrameTimingSamples = cpu.Count;
+                result.ValidGpuFrameTimingSamples = gpu.Count;
+                frameTimingStatsReported |= cpu.Count > 0 || gpu.Count > 0;
+            }
+
+            results.Add(result);
+            Debug.Log($"[stage-c-bench] scenario {name}: {samples.Count} frames, " +
+                      $"{result.GenerationsAdvanced} generations, median {result.Frames.Median:F3} ms, " +
+                      $"max {result.Frames.Max:F3} ms, uploads observed {result.FramesWithGridUpload}, " +
+                      $"gpu timing samples {result.ValidGpuFrameTimingSamples}/{result.RequestedFrameTimingFrames}");
         }
-
-        private LifeGridElement gridRef;
-
-        private sealed class FrameStats
-        {
-            public bool Available;
-            public Stats Cpu;
-            public Stats Gpu;
-            public string Reason;
-        }
-
-        private FrameStats lastTimings;
 
         /// <summary>
-        /// Real GPU frame times, where the platform provides them. A development build
-        /// with frame timing enabled reports them; anything else returns zeros, and the
-        /// probe records that instead of substituting the submit-side number.
+        /// Switches the controller's evolution backend through the control the interface
+        /// uses, so the CPU scenario is a real configuration rather than a synthetic one.
         /// </summary>
-        private IEnumerator FrameTimings(int frames)
+        private static bool SwitchBackend(LifeTerminalController controller, bool gpu)
         {
-            var result = new FrameStats();
-            var timings = new FrameTiming[frames];
-            var cpu = new List<double>();
-            var gpu = new List<double>();
+            MethodInfo method = typeof(LifeTerminalController).GetMethod(
+                "SwitchBackend", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (method == null)
+                return false;
 
-            for (int i = 0; i < frames; i++)
-            {
-                FrameTimingManager.CaptureFrameTimings();
-                yield return null;
-            }
-
-            uint captured = FrameTimingManager.GetLatestTimings((uint)frames, timings);
-            for (int i = 0; i < captured && i < timings.Length; i++)
-            {
-                if (timings[i].cpuFrameTime > 0.0)
-                    cpu.Add(timings[i].cpuFrameTime);
-
-                if (timings[i].gpuFrameTime > 0.0)
-                    gpu.Add(timings[i].gpuFrameTime);
-            }
-
-            if (cpu.Count > 0)
-                result.Cpu = Stats.From(cpu);
-
-            if (gpu.Count > 0)
-                result.Gpu = Stats.From(gpu);
-
-            result.Available = cpu.Count > 0 || gpu.Count > 0;
-            result.Reason = result.Available
-                ? null
-                : "FrameTimingManager returned no frame timings (needs a development build with frame timing enabled)";
-
-            lastTimings = result;
-            frameTimingStatsReported = result.Available;
+            method.Invoke(controller, new object[] { gpu });
+            return true;
         }
 
         // -- 5. memory ---------------------------------------------------------
@@ -626,14 +802,19 @@ namespace ConwayGameOfLife
             public bool GraphicsDriverMemoryAvailable;
             public string GraphicsDriverMemoryNote;
 
+            // What the source says the enumerated buffers hold. This is a CAPACITY SUBTOTAL
+            // of the buffers this probe lists, not the application's live total and not a
+            // peak: it leaves out, among others, the seeding session's two board arrays, the
+            // controller's initial state and pattern board, the renderer's viewport texture,
+            // and it counts a temporary readback pool that only exists during measurement.
             public long CpuStateBytes;
-            public long GpuComputeBufferBytes;
-            public long GpuStagingBytes;
+            public long GpuStateBuffersBytes;
+            public long GpuStagingArraysBytes;
             public long RendererUploadBufferBytes;
             public long RendererUploadScratchBytes;
             public long BenchBoardBytes;
             public long BenchScratchBytes;
-            public long ComputedTotalBytes;
+            public long ListedSubtotalBytes;
         }
 
         private static MemoryFacts MeasureMemory(int width, int height, byte[] board)
@@ -691,16 +872,16 @@ namespace ConwayGameOfLife
 
             long cells = (long)width * height;
             facts.CpuStateBytes = cells * 2;             // LifeSimulation current + next
-            facts.GpuComputeBufferBytes = cells * 4 * 2; // front + back
-            facts.GpuStagingBytes = cells * 4 * 2;       // uploadScratch + readbackScratch
+            facts.GpuStateBuffersBytes = cells * 4 * 2;  // front + back
+            facts.GpuStagingArraysBytes = cells * 4 * 2; // uploadScratch + readbackScratch
             facts.RendererUploadBufferBytes = cells * 4; // display upload ComputeBuffer
             facts.RendererUploadScratchBytes = cells * 4;
             facts.BenchBoardBytes = cells;               // the byte[] this probe built
             facts.BenchScratchBytes = cells * 4;         // readback sink
-            facts.ComputedTotalBytes = facts.CpuStateBytes + facts.GpuComputeBufferBytes +
-                                       facts.GpuStagingBytes + facts.RendererUploadBufferBytes +
-                                       facts.RendererUploadScratchBytes + facts.BenchBoardBytes +
-                                       facts.BenchScratchBytes;
+            facts.ListedSubtotalBytes = facts.CpuStateBytes + facts.GpuStateBuffersBytes +
+                                        facts.GpuStagingArraysBytes + facts.RendererUploadBufferBytes +
+                                        facts.RendererUploadScratchBytes + facts.BenchBoardBytes +
+                                        facts.BenchScratchBytes;
 
             return facts;
         }
@@ -709,15 +890,11 @@ namespace ConwayGameOfLife
 
         // -- sizing helpers ----------------------------------------------------
 
-        /// <summary>Repeats per measurement, scaled down as the board grows.</summary>
+        /// <summary>Repeats per measurement, scaled down as the board grows. Precision only:
+        /// the batch size is uniform, so the across-size trend is not an artefact of it.</summary>
         private static int RepeatsFor(int cells) => cells <= 1 << 20 ? 5 : cells <= 1 << 22 ? 3 : 2;
 
         private static int WarmupFor(int cells) => cells <= 1 << 20 ? 20 : 2;
-
-        private static int StepsFor(int cells) => cells <= 1 << 20 ? 20 : cells <= 1 << 22 ? 5 : 2;
-
-        /// <summary>Frames per sampling window, scaled down as a frame gets more expensive.</summary>
-        private static int FrameSamplesFor(int cells) => cells <= 1 << 22 ? 120 : 40;
 
         private static byte[] BuildFixedBoard(int cells)
         {
@@ -742,7 +919,7 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Drives the real speed slider, so the running sample uses the rate the interface
+        /// Drives the real speed slider, so the running scenarios use the rate the interface
         /// offers rather than one invented for the benchmark. Returns the value it landed on.
         /// </summary>
         private static int SetSpeed(LifeTerminalController controller, int generationsPerSecond)
@@ -759,17 +936,15 @@ namespace ConwayGameOfLife
         // -- output ------------------------------------------------------------
 
         private void WriteLine(int width, int height, int cells, string backendName,
-            Generation fbm, Generation uniform, Stats cpuLoad, Stats gpuLoad,
-            Stats cpuRules, Stats gpuSubmit, Stats gpuSynced, DisplayFacts display,
-            Stats idleFrames, float idleFps, Stats repaintFrames, float repaintFps,
-            Stats runningFrames, float runningFps, int advanced, float achievedGenerationsPerSecond,
-            int requestedGenerationsPerSecond, FrameStats timings, MemoryFacts memory,
-            int configuredVSync, int configuredTargetFrameRate, bool focusedThroughout,
-            double elapsedSeconds)
+            string boardIdentifiedAs, Generation fbm, Generation uniform, Stats cpuLoad, Stats gpuLoad,
+            Stats cpuRules, Stats gpuSubmit, Stats gpuBatch, DisplayFacts display,
+            List<ScenarioResult> scenarios, MemoryFacts memory, int configuredVSync,
+            int configuredTargetFrameRate, bool focusedThroughout, double elapsedSeconds)
         {
             var json = new StringBuilder();
             json.Append('{');
             json.Append("\"kind\": \"stage-c-bench\", ");
+            json.Append($"\"recordRound\": {RecordRound}, ");
             json.Append($"\"unityVersion\": \"{Application.unityVersion}\", ");
             json.Append($"\"graphicsDevice\": \"{SystemInfo.graphicsDeviceName}\", ");
             json.Append($"\"graphicsApi\": \"{SystemInfo.graphicsDeviceType}\", ");
@@ -780,16 +955,16 @@ namespace ConwayGameOfLife
             json.Append($"\"isDevelopmentBuild\": {Bool(Debug.isDebugBuild)}, ");
             json.Append($"\"buildGuid\": \"{Application.buildGUID}\", ");
             json.Append($"\"dataPath\": \"{Application.dataPath.Replace('\\', '/')}\", ");
-            json.Append($"\"frameTimingStatsRequested\": {Bool(frameTimingStatsReported)}, ");
+            json.Append($"\"frameTimingStatsReported\": {Bool(frameTimingStatsReported)}, ");
             json.Append($"\"runInBackgroundForced\": true, ");
             json.Append($"\"focusedThroughout\": {Bool(focusedThroughout)}, ");
             json.Append($"\"targetFrameRate\": {configuredTargetFrameRate}, ");
             json.Append($"\"vSyncCount\": {configuredVSync}, ");
+            json.Append($"\"frameScenariosRunVsyncOff\": true, ");
             json.Append($"\"board\": \"{width}x{height}\", ");
             json.Append($"\"width\": {width}, \"height\": {height}, \"cells\": {cells}, ");
             json.Append($"\"activeBackend\": \"{backendName}\", ");
-            json.Append("\"boundary\": \"wrap\", ");
-            json.Append($"\"initialBoard\": \"random seed {RandomSeed}, density {F(Density)}\", ");
+            json.Append($"\"frameScenarioBoard\": \"{boardIdentifiedAs}\", ");
             json.Append($"\"elapsedSeconds\": {F(elapsedSeconds)}, ");
 
             json.Append("\"generate\": {");
@@ -812,37 +987,41 @@ namespace ConwayGameOfLife
             json.Append("\"evolution\": {");
             json.Append($"\"cpuMsPerGeneration\": {StatsOrNull(cpuRules)}, ");
             json.Append($"\"gpuSubmitOnlyMsPerGeneration\": {StatsOrNull(gpuSubmit)}, ");
-            json.Append($"\"gpuSubmitPlusForcedSyncMsPerGeneration\": {StatsOrNull(gpuSynced)}, ");
+            json.Append($"\"gpuBatchAdvancePlusOneReadbackAmortisedMsPerGeneration\": {StatsOrNull(gpuBatch)}, ");
+            json.Append($"\"batchSteps\": {BatchSteps}, ");
             json.Append($"\"cpuCellsPerSecond\": {CellsPerSecond(cpuRules, cells)}, ");
-            json.Append($"\"stepsPerRepeat\": {StepsFor(cells)}, ");
             json.Append("\"boundary\": \"wrap\", ");
-            json.Append("\"excludes\": [\"initial state generation\", \"CPU to GPU state upload\", \"display\", \"full board verification readback inside the submit-only figure\"], ");
-            json.Append("\"caveat\": \"the submit-only figure is the cost of handing work to the GPU and must never be quoted as GPU execution time; the submit+sync figure is an upper bound containing execution and sync overhead; no CPU/GPU ratio is derived\"");
+            json.Append("\"excludes\": [\"initial state generation\", \"CPU to GPU state upload\", \"display\"], ");
+            json.Append("\"caveat\": \"gpuSubmitOnly is the cost of handing work to the GPU and must never be quoted as GPU execution time. The batch figure is (N generations + ONE full readback) / N: it is amortised, its readback share is NOT decomposed, and N is identical at every board size so the trend across sizes compares like with like. The CPU figure computes in place and never reads back, so it is a different operation from the batch figure and no CPU/GPU ratio is derived from the pair\"");
             json.Append("}, ");
 
             json.Append("\"display\": {");
-            json.Append($"\"refreshMsPerCall\": {StatsOrNull(display.Refresh)}, ");
-            json.Append($"\"cpuBackendRepaintReadbackAndUploadMs\": {StatsOrNull(display.CpuRepaintUpload)}, ");
+            json.Append($"\"repaintDispatchMsPerCall\": {StatsOrNull(display.Refresh)}, ");
+            json.Append($"\"cpuBackendBoardCopyAndUploadMs\": {StatsOrNull(display.CpuBoardCopyAndUpload)}, ");
+            json.Append("\"cpuBackendBoardCopyAndUploadIncludes\": [\"managed copy into the uint upload scratch, with 0/1 normalisation\", \"ComputeBuffer.SetData\"], ");
+            json.Append("\"cpuBackendBoardCopyAndUploadIsGpuReadback\": false, ");
+            json.Append("\"cpuBackendBoardCopyAndUploadWhen\": \"only when the board has changed AND the CPU backend is active; LifeGridElement gates it on uploadPending, so panning, zooming or a plain Refresh do not trigger it\", ");
             json.Append($"\"rendererPath\": \"{display.RendererPath}\", ");
             json.Append($"\"viewport\": \"{display.ViewportWidth}x{display.ViewportHeight}\", ");
             json.Append($"\"cellPixels\": {display.CellPixels}, ");
             json.Append($"\"visibleCells\": \"{display.VisibleCellsX}x{display.VisibleCellsY}\", ");
             json.Append($"\"visibleFractionOfBoard\": {F(display.VisibleFraction)}, ");
             json.Append($"\"boardFitsViewport\": {Bool(display.BoardFitsViewport)}, ");
-            json.Append($"\"framesPausedVsyncOff\": {StatsOrNull(idleFrames)}, ");
-            json.Append($"\"framesPausedVsyncOffPerSecond\": {F(idleFps)}, ");
-            json.Append($"\"framesPausedRepaintEveryFrameVsyncOff\": {StatsOrNull(repaintFrames)}, ");
-            json.Append($"\"framesPausedRepaintEveryFrameVsyncOffPerSecond\": {F(repaintFps)}, ");
-            json.Append($"\"framesRunningVsyncOff\": {StatsOrNull(runningFrames)}, ");
-            json.Append($"\"framesRunningVsyncOffPerSecond\": {F(runningFps)}, ");
-            json.Append($"\"requestedGenerationsPerSecond\": {requestedGenerationsPerSecond}, ");
-            json.Append($"\"achievedGenerationsPerSecond\": {F(achievedGenerationsPerSecond)}, ");
-            json.Append($"\"generationsAdvancedWhileRunning\": {advanced}, ");
-            json.Append($"\"gpuFrameTimeMs\": {StatsOrNull(timings?.Gpu)}, ");
-            json.Append($"\"cpuFrameTimeMs\": {StatsOrNull(timings?.Cpu)}, ");
-            json.Append($"\"frameTimingUnavailableReason\": {(timings != null && !timings.Available ? "\"" + timings.Reason + "\"" : "null")}, ");
-            json.Append("\"caveat\": \"refreshMs is submit side only (dispatch + background assignment); the three frame scenarios are all vsync off and uncapped, so the interval describes work rather than pacing, and the running one reports how many generations it actually advanced\"");
+            json.Append("\"caveat\": \"repaintDispatchMs is submit side only (dispatch + background assignment), not a GPU execution time\"");
             json.Append("}, ");
+
+            json.Append("\"frameScenarios\": [");
+            for (int i = 0; i < scenarios.Count; i++)
+            {
+                if (i > 0)
+                    json.Append(", ");
+
+                json.Append(ScenarioJson(scenarios[i]));
+            }
+
+            json.Append("], ");
+
+            json.Append("\"frameScenarioCaveat\": \"every scenario ran with vsync off and the frame rate uncapped, so an interval describes work rather than pacing -- and is still not a pure compute cost. GPU and CPU frame times come from FrameTimingManager, are frame-level (the whole frame, including UI composition), and are reported with the number of VALID samples against the number requested\", ");
 
             json.Append("\"memory\": {");
             json.Append($"\"managedTotalMB\": {memory.ManagedTotalMB}, ");
@@ -858,27 +1037,76 @@ namespace ConwayGameOfLife
             json.Append($"\"gpuBoardGraphicsDriverDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardGraphicsDriverDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
             json.Append($"\"gpuBoardAllocatedDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardAllocatedDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
             json.Append($"\"gpuBoardNote\": {(memory.GpuBoardNote == null ? "null" : "\"" + memory.GpuBoardNote.Replace("\"", "'") + "\"")}, ");
-            json.Append("\"computedBytes\": {");
+            json.Append($"\"gpuStateBuffersBytes\": {memory.GpuStateBuffersBytes}, ");
+            json.Append($"\"driverDeltaMinusStateBuffersBytes\": {DriverDeltaMinusStateBuffers(memory)}, ");
+            json.Append("\"driverDeltaAttribution\": \"the driver delta covers backend construction AND a LoadBoard; the two explicit state buffers account for 8 bytes per cell, and the rest is NOT attributed to anything -- no internal split was measured\", ");
+            json.Append("\"managedDeltaUsable\": false, ");
+            json.Append("\"managedDeltaNote\": \"the managed-heap delta is negative at small sizes and does not track the arrays that were allocated; it is not usable as an allocation measure and its cause was not established\", ");
+            json.Append("\"listedBufferCapacityBytes\": {");
             json.Append($"\"cpuState\": {memory.CpuStateBytes}, ");
-            json.Append($"\"gpuComputeBuffers\": {memory.GpuComputeBufferBytes}, ");
-            json.Append($"\"gpuStagingArrays\": {memory.GpuStagingBytes}, ");
+            json.Append($"\"gpuStateBuffers\": {memory.GpuStateBuffersBytes}, ");
+            json.Append($"\"gpuStagingArrays\": {memory.GpuStagingArraysBytes}, ");
             json.Append($"\"rendererUploadBuffer\": {memory.RendererUploadBufferBytes}, ");
             json.Append($"\"rendererUploadScratch\": {memory.RendererUploadScratchBytes}, ");
             json.Append($"\"benchBoard\": {memory.BenchBoardBytes}, ");
             json.Append($"\"benchScratch\": {memory.BenchScratchBytes}, ");
-            json.Append($"\"total\": {memory.ComputedTotalBytes}");
+            json.Append($"\"subtotal\": {memory.ListedSubtotalBytes}");
             json.Append("}, ");
-            json.Append("\"caveat\": \"the deltas are one more board at this size allocated and released inside this process; the computed block is what the source allocates, so the two can be checked against each other\"");
+            json.Append("\"listedBufferCapacityNote\": \"a subtotal of the buffers this probe enumerates, from the source. It is NOT the application's live total and NOT a peak: it omits, among others, the seeding session's two board arrays, the controller's initial state and pattern board, and the renderer's viewport texture, while counting a readback pool that only exists during measurement\"");
             json.Append("}, ");
 
             json.Append($"\"utc\": \"{DateTime.UtcNow:O}\"");
             json.Append('}');
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string path = Path.Combine(projectRoot, "stage-c-bench.jsonl");
+            string path = Path.Combine(projectRoot, "stage-c-bench-r2.jsonl");
             File.AppendAllText(path, json + Environment.NewLine);
             Debug.Log($"[stage-c-bench] appended {width}x{height} ({backendName}) to {path}");
             Debug.Log($"[stage-c-bench] {json}");
+        }
+
+        private static string ScenarioJson(ScenarioResult scenario)
+        {
+            var json = new StringBuilder();
+            json.Append('{');
+            json.Append($"\"name\": \"{scenario.Name}\", ");
+            json.Append($"\"backend\": \"{scenario.Backend}\", ");
+            json.Append($"\"board\": \"{scenario.Board}\", ");
+            json.Append($"\"forcedRepaintEveryFrame\": {Bool(scenario.ForcedRepaint)}, ");
+            json.Append($"\"startGeneration\": {scenario.StartGeneration}, ");
+            json.Append($"\"generationsAdvanced\": {scenario.GenerationsAdvanced}, ");
+            json.Append($"\"requestedGenerationsPerSecond\": {scenario.RequestedGenerationsPerSecond}, ");
+            json.Append($"\"achievedGenerationsPerSecond\": {F(scenario.GenerationsPerSecond)}, ");
+            json.Append($"\"frames\": {StatsOrNull(scenario.Frames)}, ");
+            json.Append($"\"framesPerSecond\": {F(scenario.FramesPerSecond)}, ");
+            json.Append($"\"firstDecileFrameMedianMs\": {F(scenario.FirstDecileFrameMedianMs)}, ");
+            json.Append($"\"lastDecileFrameMedianMs\": {F(scenario.LastDecileFrameMedianMs)}, ");
+            json.Append($"\"cutOffBySafetyCap\": {Bool(scenario.CutOffBySafetyCap)}, ");
+            json.Append($"\"framesWhereGridUploadCostWasNonZero\": {scenario.FramesWithGridUpload}, ");
+            json.Append($"\"gridReportedUploadMs\": {StatsOrNull(scenario.GridReportedUploadMs)}, ");
+            json.Append($"\"gpuFrameTimeMs\": {StatsOrNull(scenario.GpuFrameMs)}, ");
+            json.Append($"\"cpuFrameTimeMs\": {StatsOrNull(scenario.CpuFrameMs)}, ");
+            json.Append($"\"frameTimingRequestedFrames\": {scenario.RequestedFrameTimingFrames}, ");
+            json.Append($"\"validGpuFrameTimingSamples\": {scenario.ValidGpuFrameTimingSamples}, ");
+            json.Append($"\"validCpuFrameTimingSamples\": {scenario.ValidCpuFrameTimingSamples}, ");
+            json.Append("\"gridUploadCounterNote\": \"LifeGridElement.LastUploadMilliseconds is sticky: it keeps its last value until another upload overwrites it or a path resets it to zero. The count above therefore counts FRAMES whose reported cost was non-zero, not uploads; the distribution of values is what carries information\"");
+            json.Append('}');
+            return json.ToString();
+        }
+
+        /// <summary>
+        /// The measured driver delta minus the two explicit state buffers, or null when the
+        /// counter was not populated. Emitting 0 - 8 bytes per cell would have said
+        /// "the driver allocated nothing beyond the buffers", which is a claim the
+        /// measurement never made.
+        /// </summary>
+        private static string DriverDeltaMinusStateBuffers(MemoryFacts memory)
+        {
+            if (!memory.GpuBoardMeasured || !memory.GraphicsDriverMemoryAvailable)
+                return "null";
+
+            return (memory.GpuBoardGraphicsDriverDeltaBytes - memory.GpuStateBuffersBytes)
+                .ToString(CultureInfo.InvariantCulture);
         }
 
         private static string GenerationJson(Generation generation) =>
