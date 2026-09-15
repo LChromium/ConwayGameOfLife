@@ -74,7 +74,7 @@ unity test . --mode PlayMode --output test-results-playmode.xml
 
 或在 Unity 中打开 **Window → General → Test Runner** 分别运行 EditMode / PlayMode。
 
-**当前结果：EditMode 78/78 通过，PlayMode 39/39 通过。**
+**当前结果：EditMode 86/86 通过，PlayMode 44/44 通过。**
 
 ### 测试覆盖了什么
 
@@ -86,6 +86,7 @@ unity test . --mode PlayMode --output test-results-playmode.xml
 - **界面交互**（PlayMode）：用真实按钮事件驱动；**跨真实帧验证时钟**（请求 20 代/秒，实测达成 20.0）；**编辑真实棋盘**（保留控制器的模拟与回调）后断言暂停状态、棋盘人口与读数三者一致。
 - **布局适配**（PlayMode + 单测）：样本列表为 `ScrollView`，逐项滚动到可见并可选中，且视口不遮挡边界控件；面板空间与屏幕像素两种坐标正确换算。跨分辨率适配由 [`PanelScreenFit`](Assets/Scripts/PanelScreenFit.cs) 纯函数 + 单元测试覆盖（1280×720 / 1920×1080 / 2560×1440 / 1440×900 / 1920×1200）。
 - **性能口径**（PlayMode）：跨帧测时钟速率；另有一个**明确标注为 SYNTHETIC** 的人工调用微基准，其偏差写在日志与文档里。
+- **时钟过载与运行状态**（PlayMode）：用一个每步固定耗时的慢后端，验证每帧推进上限、长帧不放大追赶、暂停/重置清掉欠账与速率报告、恢复不补算旧账；时钟一律**通过真实按钮**（`▶ 运行` / `Ⅱ 暂停`）驱动。界面自报速率与**同一起止时刻的完成世代差 ÷ 墙钟**对照，文档同时写明这个 0.5 秒窗口只有约 2 代/秒的分辨力。
 
 ### 独立校验工具（可选）
 
@@ -193,18 +194,21 @@ Assets/
 │   ├── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
 │   ├── LifePerfProbe.cs           # Player 内 `-lifePerf` 测量探针（阶段 A）
 │   ├── LifeBoardBench.cs          # Player 内 `-lifeBench` 大棋盘基准（阶段 C，五口径分开）
+│   ├── LifeBenchStatistics.cs     # 基准统计（中位数/十分位，纯函数，可单测）
 │   └── RuntimeLayoutProbe.cs      # Player 内 `-lifeLayoutProbe` 布局校验探针
 ├── Tests/
-│   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机（78 项）
+│   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机、基准统计（86 项）
 │   │   ├── ConwayGameOfLife.Tests.EditMode.asmdef
 │   │   ├── LifeSimulationTests.cs
 │   │   ├── LifePatternTests.cs
 │   │   ├── LifeNoiseSeedingTests.cs
-│   │   └── LifeSeedingSessionTests.cs
-│   └── PlayMode/                  # 界面自举、交互、布局与文字适配、性能口径（39 项）
+│   │   ├── LifeSeedingSessionTests.cs
+│   │   └── LifeBenchStatisticsTests.cs
+│   └── PlayMode/                  # 界面自举、交互、布局与文字适配、性能口径、时钟过载（44 项）
 │       ├── ConwayGameOfLife.Tests.PlayMode.asmdef
 │       ├── LifeTerminalBootstrapTests.cs
 │       ├── LifeSeedingIntegrationTests.cs
+│       ├── LifeClockOverloadTests.cs
 │       └── GpuCpuEquivalenceTests.cs
 ├── Editor/
 │   ├── PlayerBuild.cs             # Player 构建入口：开发版 / 帧时间版 / 发布版
@@ -227,10 +231,12 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 .verify/                            # 独立校验工具（不属于 Unity 工程）
 ```
 
-> 阶段 C 的基准原始记录在仓库根目录：`stage-c-bench-r3.jsonl`（当前）、
-> `stage-c-bench-r2.jsonl` 与 `stage-c-bench.jsonl`（前两轮，**原样保留**；
+> 阶段 C 的基准原始记录在仓库根目录：`stage-c-bench-r4.jsonl`（当前）、`stage-c-bench-r3.jsonl`、
+> `stage-c-bench-r2.jsonl` 与 `stage-c-bench.jsonl`（前几轮，**原样保留**；
 > 被修正的说法逐条列在文档 §0）。每条记录自带 `recordRound` / `buildGuid` / `dataPath`
 > 以及各字段自己的可用性说明，因此一个数字来自哪个配置、哪个场景不需要靠文件名猜。
+> r4 只重跑了受影响的帧场景（`-lifeBenchScenarios frame`），其余口径在记录里写 `null`
+> 并列进 `phasesSkipped`——**没测就是没测，不写 0**。
 
 > `.verify/`、`test-results-*.xml` 与根目录的图表工件都不在 `Assets/` 下，
 > 不会被 Unity 导入，也不进入构建产物。
@@ -262,10 +268,14 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 
 > **阶段 C 进行中**：大棋盘基准（256²/1024²/2048²/4096²）把生成、上传、演化、显示、内存占用
 > **五个口径分开记录**，见 [`Assets/Docs/StageC-Benchmark.md`](Assets/Docs/StageC-Benchmark.md)
-> 与 `stage-c-bench-r3.jsonl`。两个关键数字：**4096² 的 fBm 生成约 8.9 秒**（同步生成函数耗时，
+> 与 `stage-c-bench-r4.jsonl`。两个关键数字：**4096² 的 fBm 生成约 8.9 秒**（同步生成函数耗时，
 > 不是端到端等待），**同尺寸下只有 1.67% 的盘面可见**。
-> **时钟过载保护已实现**（每帧推进上限＋步间预算，超限丢弃追赶欠账、不跳过演化步骤），
-> 界面区分目标与实际速率；追赶受控**不等于**单步不卡顿。
+> **时钟过载保护已实现**（每帧推进上限＋步间预算，超限丢弃追赶欠账、不跳过演化步骤）；
+> 暂停/重置/切后端**结束整段时钟状态**（欠账、速率窗口、自报速率、过载标志），
+> 窗口形成前界面显示「采样中」而不是把初始化 0 当成实测；界面速率与墙钟实测并列记录。
+> 追赶受控**不等于**单步不卡顿：CPU 后端单帧中位 206 ms（2048²）/ 739 ms（4096²）。
+> **下一项独立工作是「把 CPU 大棋盘演化移到后台」**（后台独占模拟状态、主线程只接收完整世代、
+> 重置或切后端后旧结果不得覆盖新棋盘），密度总览再往后排。
 > 亚像素密度总览按评审意见**暂缓**；GPU 独立生成噪声仍是**远期可选实验**；CPU 单生成器保留。
 
 ---

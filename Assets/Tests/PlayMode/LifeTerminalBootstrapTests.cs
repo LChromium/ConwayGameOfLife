@@ -290,9 +290,13 @@ namespace ConwayGameOfLife.Tests
             Assert.AreEqual(12, PopulationOf(live), "expected the pentadecathlon's 12 cells");
             Assert.AreEqual("0012", population.text);
 
-            // Start the clock so we can prove an edit pauses it.
+            // Start the clock so we can prove an edit pauses it. The state readout carries the
+            // run's rate as well now, and a run whose first rate window has not closed yet says
+            // it is sampling rather than reporting the initialised zero as a measurement -- so
+            // the assertion is on the running prefix.
             Press(FindButton(root, "▶ 运行"));
-            Assert.AreEqual("演算中", state.text, "the clock should be running");
+            Assert.IsTrue(state.text.StartsWith("演算中"),
+                $"the clock should be running, got '{state.text}'");
 
             // Edit one cell through the real element, leaving the controller's callback in place.
             PaintCellForTest(grid, 0, 0);

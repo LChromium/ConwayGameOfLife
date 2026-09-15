@@ -14,11 +14,16 @@ using Debug = UnityEngine.Debug;
 namespace ConwayGameOfLife
 {
     /// <summary>
-    /// Stage-C large-board benchmark, round 2. Activated with "-lifeBench" together with
+    /// Stage-C large-board benchmark. Activated with "-lifeBench" together with
     /// "-lifeBoard WxH"; measures the board the Player was launched with, appends one JSON
-    /// line to <c>stage-c-bench-r2.jsonl</c> and quits. One process per board size, so each
+    /// line to <c>stage-c-bench-r4.jsonl</c> and quits. One process per board size, so each
     /// size gets a fresh allocator and a fresh peak, which is the only way a memory figure
     /// for a size means anything.
+    ///
+    /// <para><b>A run may measure a subset of the axes.</b> "-lifeBenchScenarios frame" runs
+    /// only the four cross-frame scenarios, for the case where one axis's semantics changed and
+    /// re-publishing the others would be noise. A skipped axis is written as <c>null</c> and
+    /// named in <c>phasesSkipped</c>; it is never written as a zero.</para>
     ///
     /// <para><b>Five axes, recorded separately and never summed into one number.</b>
     /// Stage A refused to attribute a frame to its parts without per-part data; this probe
@@ -38,7 +43,9 @@ namespace ConwayGameOfLife
     /// <item><b>display</b> -- the repaint dispatch, the cost of the CPU backend's board copy
     /// and upload, and four <b>separately labelled</b> frame scenarios, each with its own
     /// frame-timing samples and valid-sample counts: paused, paused with a forced repaint
-    /// every frame, normal evolution, and normal evolution on the CPU backend.</item>
+    /// every frame, normal evolution, and normal evolution on the CPU backend. Each scenario
+    /// records the rate the benchmark itself counted over its own wall clock <b>and</b> the
+    /// rate the controller published, side by side.</item>
     /// <item><b>memory</b> -- the capacity of the buffers this probe enumerates (from the
     /// source), the measured graphics-driver delta for one more board, and the difference
     /// between them marked <b>unattributed</b>. No internal split is claimed, because the
@@ -52,7 +59,13 @@ namespace ConwayGameOfLife
     public sealed class LifeBoardBench : MonoBehaviour
     {
         /// <summary>Round of the measurement contract that produced a record.</summary>
-        private const int RecordRound = 3;
+        private const int RecordRound = 4;
+
+        /// <summary>The axes a full run measures. A run that names a subset records that.</summary>
+        private static readonly string[] AllPhases =
+        {
+            "generate", "upload", "evolution", "display-fixed-costs", "frame-scenarios", "memory",
+        };
 
         /// <summary>
         /// Board the stage-B reproduction command uses, so generation figures are comparable.
@@ -102,6 +115,28 @@ namespace ConwayGameOfLife
             startedAt = now;
         }
 
+        /// <summary>
+        /// "-lifeBenchScenarios frame" measures only the four cross-frame scenarios. A record
+        /// never claims more than it measured: the axes the run skipped are written as null and
+        /// listed in <c>phasesSkipped</c>.
+        ///
+        /// <para>This exists because a change to one axis does not invalidate the others. Round 4
+        /// changed the clock's rate and overload reporting, which only the frame scenarios
+        /// observe; re-publishing the generation, upload and evolution figures would have added
+        /// rows that differ from round 3 by run-to-run noise and nothing else.</para>
+        /// </summary>
+        private static bool FrameScenariosOnly()
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-lifeBenchScenarios")
+                    return string.Equals(args[i + 1], "frame", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return false;
+        }
+
         // -- results carried to the writer -------------------------------------
 
         private sealed class Generation
@@ -123,9 +158,18 @@ namespace ConwayGameOfLife
             // measurement run must not be at the mercy of whatever took focus. This was
             // observed: one phase reported 778 s of wall clock while every sample inside it
             // was under 100 ms.
+            //
+            // It is forced true and LEFT true until the process exits. Round 3 restored it
+            // before Application.Quit(), which put the player back into exactly the state where
+            // an unfocused player does not run its loop -- and then the quit was not processed:
+            // round 4's release run wrote its record at 13.2 s and was still alive when the
+            // external 180 s guard killed it. This probe always quits as its last act, so there
+            // is nothing to restore the setting for.
             bool configuredRunInBackground = Application.runInBackground;
             Application.runInBackground = true;
             bool focusedAtStart = Application.isFocused;
+            Debug.Log($"[stage-c-bench] runInBackground was {configuredRunInBackground}, forced true " +
+                      "and left true until the process exits");
 
             for (int i = 0; i < 30; i++)
                 yield return null;
@@ -145,9 +189,11 @@ namespace ConwayGameOfLife
             int width = active.Width;
             int height = active.Height;
             int cells = width * height;
+            bool frameScenariosOnly = FrameScenariosOnly();
             gridRef = grid;
             controllerRef = controller;
-            Debug.Log($"[stage-c-bench] {width}x{height} ({cells} cells), active backend {active.Name}");
+            Debug.Log($"[stage-c-bench] {width}x{height} ({cells} cells), active backend {active.Name}" +
+                      (frameScenariosOnly ? ", frame scenarios only" : ", all axes"));
 
             // The starting board for every measurement below is a plain fixed random one:
             // generation is measured separately, and the other axes must be comparable
@@ -163,37 +209,54 @@ namespace ConwayGameOfLife
                 $"fixed random seed {RandomSeed} density {F(Density)}, loaded into the active backend " +
                 "before the frame scenarios, wrap boundary, generation reset to 0";
 
-            Generation fbm = MeasureGeneration(FbmParameters, width, height);
-            Phase("generate-fbm", ref phaseStartedAt);
-            yield return null;
+            Generation fbm = null;
+            Generation uniform = null;
+            LifeBenchStatistics.Summary cpuLoad = default;
+            LifeBenchStatistics.Summary gpuLoad = default;
+            LifeBenchStatistics.Summary cpuRules = default;
+            LifeBenchStatistics.Summary gpuSubmit = default;
+            LifeBenchStatistics.Summary gpuBatch = default;
+            DisplayFacts display = null;
 
-            Generation uniform = MeasureGeneration(UniformParameters, width, height);
-            Phase("generate-uniform", ref phaseStartedAt);
-            yield return null;
+            if (frameScenariosOnly)
+            {
+                Debug.Log("[stage-c-bench] skipped by -lifeBenchScenarios frame: generate, upload, " +
+                          "evolution, display fixed costs");
+            }
+            else
+            {
+                fbm = MeasureGeneration(FbmParameters, width, height);
+                Phase("generate-fbm", ref phaseStartedAt);
+                yield return null;
 
-            LifeBenchStatistics.Summary cpuLoad = MeasureUploadCpu(board, width, height);
-            Phase("upload-cpu", ref phaseStartedAt);
-            yield return null;
+                uniform = MeasureGeneration(UniformParameters, width, height);
+                Phase("generate-uniform", ref phaseStartedAt);
+                yield return null;
 
-            LifeBenchStatistics.Summary gpuLoad = MeasureUploadGpu(board, width, height);
-            Phase("upload-gpu", ref phaseStartedAt);
-            yield return null;
+                cpuLoad = MeasureUploadCpu(board, width, height);
+                Phase("upload-cpu", ref phaseStartedAt);
+                yield return null;
 
-            LifeBenchStatistics.Summary cpuRules = MeasureCpuRules(board, width, height, cells);
-            Phase("evolution-cpu", ref phaseStartedAt);
-            yield return null;
+                gpuLoad = MeasureUploadGpu(board, width, height);
+                Phase("upload-gpu", ref phaseStartedAt);
+                yield return null;
 
-            LifeBenchStatistics.Summary gpuSubmit = MeasureGpuRules(board, width, height, cells, synchronise: false);
-            Phase("evolution-gpu-submit", ref phaseStartedAt);
-            yield return null;
+                cpuRules = MeasureCpuRules(board, width, height, cells);
+                Phase("evolution-cpu", ref phaseStartedAt);
+                yield return null;
 
-            LifeBenchStatistics.Summary gpuBatch = MeasureGpuRules(board, width, height, cells, synchronise: true);
-            Phase("evolution-gpu-batch-readback", ref phaseStartedAt);
-            yield return null;
+                gpuSubmit = MeasureGpuRules(board, width, height, cells, synchronise: false);
+                Phase("evolution-gpu-submit", ref phaseStartedAt);
+                yield return null;
 
-            DisplayFacts display = MeasureDisplay(grid, board, width, height, cells);
-            Phase("display-fixed-costs", ref phaseStartedAt);
-            yield return null;
+                gpuBatch = MeasureGpuRules(board, width, height, cells, synchronise: true);
+                Phase("evolution-gpu-batch-readback", ref phaseStartedAt);
+                yield return null;
+
+                display = MeasureDisplay(grid, board, width, height, cells);
+                Phase("display-fixed-costs", ref phaseStartedAt);
+                yield return null;
+            }
 
             // Frame scenarios. vsync off and uncapped, so the interval describes work rather
             // than pacing -- and is still not a pure compute cost.
@@ -283,18 +346,27 @@ namespace ConwayGameOfLife
             Application.targetFrameRate = configuredTargetFrameRate;
             SetRunning(controller, wasRunning);
 
-            MemoryFacts memory = MeasureMemory(width, height, board);
-            Phase("memory", ref phaseStartedAt);
-            yield return null;
+            MemoryFacts memory = null;
+            if (frameScenariosOnly)
+            {
+                Debug.Log("[stage-c-bench] skipped by -lifeBenchScenarios frame: memory");
+            }
+            else
+            {
+                memory = MeasureMemory(width, height, board);
+                Phase("memory", ref phaseStartedAt);
+                yield return null;
+            }
 
             bool focusedAtEnd = Application.isFocused;
-            Application.runInBackground = configuredRunInBackground;
 
-            WriteLine(width, height, cells, active?.Name ?? "unknown", boardIdentifiedAs, fbm, uniform,
-                cpuLoad, gpuLoad, cpuRules, gpuSubmit, gpuBatch, display, scenarios, memory,
+            WriteLine(frameScenariosOnly, width, height, cells, active?.Name ?? "unknown", boardIdentifiedAs,
+                fbm, uniform, cpuLoad, gpuLoad, cpuRules, gpuSubmit, gpuBatch, display, scenarios, memory,
                 configuredVSync, configuredTargetFrameRate, focusedAtStart && focusedAtEnd,
                 Time.realtimeSinceStartup - startedAt);
 
+            // runInBackground is deliberately NOT restored here: an unfocused player that is not
+            // running in the background does not process this quit. See the note where it is set.
             Application.Quit(0);
         }
 
@@ -563,6 +635,7 @@ namespace ConwayGameOfLife
             public float FramesPerSecond;
             public float GenerationsPerSecond;
             public float ControllerAchievedGenerationsPerSecond;
+            public bool ControllerRateSampleFormed;
             public bool ControllerOverloaded;
             public double FirstDecileFrameMedianMs;
             public double LastDecileFrameMedianMs;
@@ -686,10 +759,12 @@ namespace ConwayGameOfLife
 
             // What the controller itself says it achieved, and whether it had to drop
             // catch-up debt. This is the number the interface shows; it is recorded next to
-            // the benchmark's own count so the two can be compared.
+            // the benchmark's own count so the two can be compared -- and it is NOT evidence
+            // on its own, because the controller publishes one tumbling window's average.
             result.ControllerAchievedGenerationsPerSecond = controllerRef != null
                 ? controllerRef.AchievedGenerationsPerSecond
                 : 0f;
+            result.ControllerRateSampleFormed = controllerRef != null && controllerRef.AchievedRateMeasured;
             result.ControllerOverloaded = controllerRef != null && controllerRef.ClockOverloaded;
 
             if (uploads.Count > 0)
@@ -757,8 +832,6 @@ namespace ConwayGameOfLife
             public long AllocatedTotalMB;
             public long ReservedTotalMB;
             public long GraphicsDriverMB;
-            public long SystemMemoryMB;
-            public long GraphicsMemoryMB;
 
             // Deltas are kept in bytes: at 256x256 a board is well under a megabyte, and
             // rounding to whole megabytes reported every one of them as zero.
@@ -789,11 +862,7 @@ namespace ConwayGameOfLife
 
         private static MemoryFacts MeasureMemory(int width, int height, byte[] board)
         {
-            var facts = new MemoryFacts
-            {
-                SystemMemoryMB = SystemInfo.systemMemorySize,
-                GraphicsMemoryMB = SystemInfo.graphicsMemorySize,
-            };
+            var facts = new MemoryFacts();
 
             long managedBefore = GC.GetTotalMemory(false);
             long allocatedBefore = Profiler.GetTotalAllocatedMemoryLong();
@@ -876,6 +945,13 @@ namespace ConwayGameOfLife
             return board;
         }
 
+        /// <summary>
+        /// Starts or stops the clock through the controller's OWN commands, never by writing the
+        /// private running flag. Round 3 wrote the flag, which skipped the pause path entirely --
+        /// and the pause path is exactly what ends the run's clock state (debt, rate window,
+        /// published rate, overload flag). A scenario that started from a stale report was
+        /// measuring a state the application cannot reach. Returns the state it found.
+        /// </summary>
         private static bool SetRunning(LifeTerminalController controller, bool value)
         {
             FieldInfo field = typeof(LifeTerminalController).GetField(
@@ -884,7 +960,19 @@ namespace ConwayGameOfLife
                 return false;
 
             bool previous = (bool)field.GetValue(controller);
-            field.SetValue(controller, value);
+            if (previous == value)
+                return previous;
+
+            MethodInfo command = typeof(LifeTerminalController).GetMethod(
+                value ? "ToggleRunning" : "Stop", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (command == null)
+            {
+                Debug.LogWarning($"[stage-c-bench] could not {(value ? "start" : "stop")} the clock " +
+                                 "through the controller's own command");
+                return previous;
+            }
+
+            command.Invoke(controller, null);
             return previous;
         }
 
@@ -905,7 +993,7 @@ namespace ConwayGameOfLife
 
         // -- output ------------------------------------------------------------
 
-        private void WriteLine(int width, int height, int cells, string backendName,
+        private void WriteLine(bool frameScenariosOnly, int width, int height, int cells, string backendName,
             string boardIdentifiedAs, Generation fbm, Generation uniform, LifeBenchStatistics.Summary cpuLoad, LifeBenchStatistics.Summary gpuLoad,
             LifeBenchStatistics.Summary cpuRules, LifeBenchStatistics.Summary gpuSubmit, LifeBenchStatistics.Summary gpuBatch, DisplayFacts display,
             List<ScenarioResult> scenarios, MemoryFacts memory, int configuredVSync,
@@ -920,65 +1008,79 @@ namespace ConwayGameOfLife
             json.Append($"\"graphicsApi\": \"{SystemInfo.graphicsDeviceType}\", ");
             json.Append($"\"processor\": \"{SystemInfo.processorType}\", ");
             json.Append($"\"processorCount\": {SystemInfo.processorCount}, ");
-            json.Append($"\"systemMemoryMB\": {memory.SystemMemoryMB}, ");
-            json.Append($"\"graphicsMemoryMB\": {memory.GraphicsMemoryMB}, ");
+            json.Append($"\"systemMemoryMB\": {SystemInfo.systemMemorySize}, ");
+            json.Append($"\"graphicsMemoryMB\": {SystemInfo.graphicsMemorySize}, ");
             json.Append($"\"isDevelopmentBuild\": {Bool(Debug.isDebugBuild)}, ");
             json.Append($"\"buildGuid\": \"{Application.buildGUID}\", ");
             json.Append($"\"dataPath\": \"{Application.dataPath.Replace('\\', '/')}\", ");
             json.Append($"\"frameTimingStatsReported\": {Bool(frameTimingStatsReported)}, ");
             json.Append($"\"runInBackgroundForced\": true, ");
+            json.Append($"\"runInBackgroundRestored\": false, ");
             json.Append($"\"focusedThroughout\": {Bool(focusedThroughout)}, ");
             json.Append($"\"targetFrameRate\": {configuredTargetFrameRate}, ");
             json.Append($"\"vSyncCount\": {configuredVSync}, ");
             json.Append($"\"frameScenariosRunVsyncOff\": true, ");
+            json.Append($"\"phasesRun\": [{PhaseList(frameScenariosOnly)}], ");
+            json.Append($"\"phasesSkipped\": [{SkippedPhaseList(frameScenariosOnly)}], ");
+            json.Append($"\"phasesNote\": \"{PhasesNote(frameScenariosOnly)}\", ");
             json.Append($"\"board\": \"{width}x{height}\", ");
             json.Append($"\"width\": {width}, \"height\": {height}, \"cells\": {cells}, ");
             json.Append($"\"activeBackend\": \"{backendName}\", ");
             json.Append($"\"frameScenarioBoard\": \"{boardIdentifiedAs}\", ");
             json.Append($"\"elapsedSeconds\": {F(elapsedSeconds)}, ");
 
-            json.Append("\"generate\": {");
-            json.Append($"\"fbm\": {GenerationJson(fbm)}, ");
-            json.Append($"\"uniform\": {GenerationJson(uniform)}, ");
-            json.Append($"\"excludes\": [\"upload\", \"evolution\", \"display\"], ");
-            json.Append("\"method\": \"Stopwatch around LifeNoiseSeeding.Generate (CPU, managed, synchronous)\", ");
-            json.Append("\"caveat\": \"uniform mode ignores scale/warp/cluster, so its parameters string is not comparable field by field\"");
-            json.Append("}, ");
+            if (frameScenariosOnly)
+            {
+                // Named as skipped rather than omitted or zeroed: a reader must be able to tell
+                // "not measured" from "measured as nothing".
+                json.Append("\"generate\": null, \"upload\": null, \"evolution\": null, ");
+                json.Append("\"display\": null, ");
+            }
+            else
+            {
+                json.Append("\"generate\": {");
+                json.Append($"\"fbm\": {GenerationJson(fbm)}, ");
+                json.Append($"\"uniform\": {GenerationJson(uniform)}, ");
+                json.Append($"\"excludes\": [\"upload\", \"evolution\", \"display\"], ");
+                json.Append("\"method\": \"Stopwatch around LifeNoiseSeeding.Generate (CPU, managed, synchronous)\", ");
+                json.Append("\"caveat\": \"uniform mode ignores scale/warp/cluster, so its parameters string is not comparable field by field\"");
+                json.Append("}, ");
 
-            json.Append("\"upload\": {");
-            json.Append($"\"cpuLoadBoardMs\": {StatsOrNull(cpuLoad)}, ");
-            json.Append($"\"gpuLoadBoardMs\": {StatsOrNull(gpuLoad)}, ");
-            json.Append($"\"gpuCellsPerSecond\": {CellsPerSecond(gpuLoad, cells)}, ");
-            json.Append($"\"cpuCellsPerSecond\": {CellsPerSecond(cpuLoad, cells)}, ");
-            json.Append("\"gpuIncludes\": [\"staging uint copy\", \"ComputeBuffer.SetData\"], ");
-            json.Append("\"caveat\": \"SetData returns once the data has been handed to the driver; it is not a transfer-complete figure, and no bandwidth claim is made from it\"");
-            json.Append("}, ");
+                json.Append("\"upload\": {");
+                json.Append($"\"cpuLoadBoardMs\": {StatsOrNull(cpuLoad)}, ");
+                json.Append($"\"gpuLoadBoardMs\": {StatsOrNull(gpuLoad)}, ");
+                json.Append($"\"gpuCellsPerSecond\": {CellsPerSecond(gpuLoad, cells)}, ");
+                json.Append($"\"cpuCellsPerSecond\": {CellsPerSecond(cpuLoad, cells)}, ");
+                json.Append("\"gpuIncludes\": [\"staging uint copy\", \"ComputeBuffer.SetData\"], ");
+                json.Append("\"caveat\": \"SetData returns once the data has been handed to the driver; it is not a transfer-complete figure, and no bandwidth claim is made from it\"");
+                json.Append("}, ");
 
-            json.Append("\"evolution\": {");
-            json.Append($"\"cpuMsPerGeneration\": {StatsOrNull(cpuRules)}, ");
-            json.Append($"\"gpuSubmitOnlyMsPerGeneration\": {StatsOrNull(gpuSubmit)}, ");
-            json.Append($"\"gpuBatchAdvancePlusOneReadbackAmortisedMsPerGeneration\": {StatsOrNull(gpuBatch)}, ");
-            json.Append($"\"batchSteps\": {BatchSteps}, ");
-            json.Append($"\"cpuCellsPerSecond\": {CellsPerSecond(cpuRules, cells)}, ");
-            json.Append("\"boundary\": \"wrap\", ");
-            json.Append("\"excludes\": [\"initial state generation\", \"CPU to GPU state upload\", \"display\"], ");
-            json.Append("\"caveat\": \"gpuSubmitOnly is the cost of handing work to the GPU and must never be quoted as GPU execution time. The batch figure is (N generations + ONE full readback) / N: it is amortised, its readback share is NOT decomposed, and N is identical at every board size so the trend across sizes compares like with like. The CPU figure computes in place and never reads back, so it is a different operation from the batch figure and no CPU/GPU ratio is derived from the pair\"");
-            json.Append("}, ");
+                json.Append("\"evolution\": {");
+                json.Append($"\"cpuMsPerGeneration\": {StatsOrNull(cpuRules)}, ");
+                json.Append($"\"gpuSubmitOnlyMsPerGeneration\": {StatsOrNull(gpuSubmit)}, ");
+                json.Append($"\"gpuBatchAdvancePlusOneReadbackAmortisedMsPerGeneration\": {StatsOrNull(gpuBatch)}, ");
+                json.Append($"\"batchSteps\": {BatchSteps}, ");
+                json.Append($"\"cpuCellsPerSecond\": {CellsPerSecond(cpuRules, cells)}, ");
+                json.Append("\"boundary\": \"wrap\", ");
+                json.Append("\"excludes\": [\"initial state generation\", \"CPU to GPU state upload\", \"display\"], ");
+                json.Append("\"caveat\": \"gpuSubmitOnly is the cost of handing work to the GPU and must never be quoted as GPU execution time. The batch figure is (N generations + ONE full readback) / N: it is amortised, its readback share is NOT decomposed, and N is identical at every board size so the trend across sizes compares like with like. The CPU figure computes in place and never reads back, so it is a different operation from the batch figure and no CPU/GPU ratio is derived from the pair\"");
+                json.Append("}, ");
 
-            json.Append("\"display\": {");
-            json.Append($"\"repaintDispatchMsPerCall\": {StatsOrNull(display.Refresh)}, ");
-            json.Append($"\"cpuBackendBoardCopyAndUploadMs\": {StatsOrNull(display.CpuBoardCopyAndUpload)}, ");
-            json.Append("\"cpuBackendBoardCopyAndUploadIncludes\": [\"managed copy into the uint upload scratch, with 0/1 normalisation\", \"ComputeBuffer.SetData\"], ");
-            json.Append("\"cpuBackendBoardCopyAndUploadIsGpuReadback\": false, ");
-            json.Append("\"cpuBackendBoardCopyAndUploadWhen\": \"only when the board has changed AND the CPU backend is active; LifeGridElement gates it on uploadPending, so panning, zooming or a plain Refresh do not trigger it\", ");
-            json.Append($"\"rendererPath\": \"{display.RendererPath}\", ");
-            json.Append($"\"viewport\": \"{display.ViewportWidth}x{display.ViewportHeight}\", ");
-            json.Append($"\"cellPixels\": {display.CellPixels}, ");
-            json.Append($"\"visibleCells\": \"{display.VisibleCellsX}x{display.VisibleCellsY}\", ");
-            json.Append($"\"visibleFractionOfBoard\": {F(display.VisibleFraction)}, ");
-            json.Append($"\"boardFitsViewport\": {Bool(display.BoardFitsViewport)}, ");
-            json.Append("\"caveat\": \"repaintDispatchMs is submit side only (dispatch + background assignment), not a GPU execution time\"");
-            json.Append("}, ");
+                json.Append("\"display\": {");
+                json.Append($"\"repaintDispatchMsPerCall\": {StatsOrNull(display.Refresh)}, ");
+                json.Append($"\"cpuBackendBoardCopyAndUploadMs\": {StatsOrNull(display.CpuBoardCopyAndUpload)}, ");
+                json.Append("\"cpuBackendBoardCopyAndUploadIncludes\": [\"managed copy into the uint upload scratch, with 0/1 normalisation\", \"ComputeBuffer.SetData\"], ");
+                json.Append("\"cpuBackendBoardCopyAndUploadIsGpuReadback\": false, ");
+                json.Append("\"cpuBackendBoardCopyAndUploadWhen\": \"only when the board has changed AND the CPU backend is active; LifeGridElement gates it on uploadPending, so panning, zooming or a plain Refresh do not trigger it\", ");
+                json.Append($"\"rendererPath\": \"{display.RendererPath}\", ");
+                json.Append($"\"viewport\": \"{display.ViewportWidth}x{display.ViewportHeight}\", ");
+                json.Append($"\"cellPixels\": {display.CellPixels}, ");
+                json.Append($"\"visibleCells\": \"{display.VisibleCellsX}x{display.VisibleCellsY}\", ");
+                json.Append($"\"visibleFractionOfBoard\": {F(display.VisibleFraction)}, ");
+                json.Append($"\"boardFitsViewport\": {Bool(display.BoardFitsViewport)}, ");
+                json.Append("\"caveat\": \"repaintDispatchMs is submit side only (dispatch + background assignment), not a GPU execution time\"");
+                json.Append("}, ");
+            }
 
             json.Append("\"frameScenarios\": [");
             for (int i = 0; i < scenarios.Count; i++)
@@ -991,45 +1093,52 @@ namespace ConwayGameOfLife
 
             json.Append("], ");
 
-            json.Append("\"frameScenarioCaveat\": \"every scenario ran with vsync off and the frame rate uncapped, so an interval describes work rather than pacing -- and is still not a pure compute cost. GPU and CPU frame times come from FrameTimingManager, are frame-level (the whole frame, including UI composition), and are reported with the number of VALID samples against the number requested\", ");
+            json.Append("\"frameScenarioCaveat\": \"every scenario ran with vsync off and the frame rate uncapped, so an interval describes work rather than pacing -- and is still not a pure compute cost. Each scenario records TWO rates for the same window: achievedGenerationsPerSecond is this probe's own completed-generation difference over its own wall clock, and controllerReportedGenerationsPerSecond is what the panel published from its 0.5 s tumbling window; neither stands alone. GPU and CPU frame times come from FrameTimingManager, are frame-level (the whole frame, including UI composition), and are reported with the number of VALID samples against the number requested\", ");
 
-            json.Append("\"memory\": {");
-            json.Append($"\"managedTotalMB\": {memory.ManagedTotalMB}, ");
-            json.Append($"\"allocatedTotalMB\": {memory.AllocatedTotalMB}, ");
-            json.Append($"\"reservedTotalMB\": {memory.ReservedTotalMB}, ");
-            json.Append($"\"graphicsDriverAllocatedMB\": {memory.GraphicsDriverMB}, ");
-            json.Append($"\"graphicsDriverMemoryAvailable\": {Bool(memory.GraphicsDriverMemoryAvailable)}, ");
-            json.Append($"\"graphicsDriverMemoryNote\": {(memory.GraphicsDriverMemoryNote == null ? "null" : "\"" + memory.GraphicsDriverMemoryNote.Replace("\"", "'") + "\"")}, ");
-            json.Append($"\"cpuBoardManagedDeltaBytes\": {memory.CpuBoardManagedDeltaBytes}, ");
-            json.Append($"\"cpuBoardAllocatedDeltaBytes\": {memory.CpuBoardAllocatedDeltaBytes}, ");
-            json.Append($"\"gpuBoardMeasured\": {Bool(memory.GpuBoardMeasured)}, ");
-            json.Append($"\"gpuBoardManagedDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardManagedDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
-            json.Append($"\"gpuBoardGraphicsDriverDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardGraphicsDriverDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
-            json.Append($"\"gpuBoardAllocatedDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardAllocatedDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
-            json.Append($"\"gpuBoardNote\": {(memory.GpuBoardNote == null ? "null" : "\"" + memory.GpuBoardNote.Replace("\"", "'") + "\"")}, ");
-            json.Append($"\"gpuStateBuffersBytes\": {memory.GpuStateBuffersBytes}, ");
-            json.Append($"\"driverDeltaMinusStateBuffersBytes\": {DriverDeltaMinusStateBuffers(memory)}, ");
-            json.Append("\"driverDeltaAttribution\": \"the driver delta covers backend construction AND a LoadBoard; the two explicit state buffers account for 8 bytes per cell, and the rest is NOT attributed to anything -- no internal split was measured\", ");
-            json.Append("\"managedDeltaUsable\": false, ");
-            json.Append("\"managedDeltaNote\": \"the managed-heap delta is negative at small sizes and does not track the arrays that were allocated; it is not usable as an allocation measure and its cause was not established\", ");
-            json.Append("\"listedBufferCapacityBytes\": {");
-            json.Append($"\"cpuState\": {memory.CpuStateBytes}, ");
-            json.Append($"\"gpuStateBuffers\": {memory.GpuStateBuffersBytes}, ");
-            json.Append($"\"gpuStagingArrays\": {memory.GpuStagingArraysBytes}, ");
-            json.Append($"\"rendererUploadBuffer\": {memory.RendererUploadBufferBytes}, ");
-            json.Append($"\"rendererUploadScratch\": {memory.RendererUploadScratchBytes}, ");
-            json.Append($"\"benchBoard\": {memory.BenchBoardBytes}, ");
-            json.Append($"\"benchScratch\": {memory.BenchScratchBytes}, ");
-            json.Append($"\"subtotal\": {memory.ListedSubtotalBytes}");
-            json.Append("}, ");
-            json.Append("\"listedBufferCapacityNote\": \"a subtotal of the buffers this probe enumerates, from the source. It is NOT the application's live total and NOT a peak: it omits, among others, the seeding session's two board arrays, the controller's initial state and pattern board, and the renderer's viewport texture, while counting a readback pool that only exists during measurement\"");
-            json.Append("}, ");
+            if (frameScenariosOnly)
+            {
+                json.Append("\"memory\": null, ");
+            }
+            else
+            {
+                json.Append("\"memory\": {");
+                json.Append($"\"managedTotalMB\": {memory.ManagedTotalMB}, ");
+                json.Append($"\"allocatedTotalMB\": {memory.AllocatedTotalMB}, ");
+                json.Append($"\"reservedTotalMB\": {memory.ReservedTotalMB}, ");
+                json.Append($"\"graphicsDriverAllocatedMB\": {memory.GraphicsDriverMB}, ");
+                json.Append($"\"graphicsDriverMemoryAvailable\": {Bool(memory.GraphicsDriverMemoryAvailable)}, ");
+                json.Append($"\"graphicsDriverMemoryNote\": {(memory.GraphicsDriverMemoryNote == null ? "null" : "\"" + memory.GraphicsDriverMemoryNote.Replace("\"", "'") + "\"")}, ");
+                json.Append($"\"cpuBoardManagedDeltaBytes\": {memory.CpuBoardManagedDeltaBytes}, ");
+                json.Append($"\"cpuBoardAllocatedDeltaBytes\": {memory.CpuBoardAllocatedDeltaBytes}, ");
+                json.Append($"\"gpuBoardMeasured\": {Bool(memory.GpuBoardMeasured)}, ");
+                json.Append($"\"gpuBoardManagedDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardManagedDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
+                json.Append($"\"gpuBoardGraphicsDriverDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardGraphicsDriverDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
+                json.Append($"\"gpuBoardAllocatedDeltaBytes\": {(memory.GpuBoardMeasured ? memory.GpuBoardAllocatedDeltaBytes.ToString(CultureInfo.InvariantCulture) : "null")}, ");
+                json.Append($"\"gpuBoardNote\": {(memory.GpuBoardNote == null ? "null" : "\"" + memory.GpuBoardNote.Replace("\"", "'") + "\"")}, ");
+                json.Append($"\"gpuStateBuffersBytes\": {memory.GpuStateBuffersBytes}, ");
+                json.Append($"\"driverDeltaMinusStateBuffersBytes\": {DriverDeltaMinusStateBuffers(memory)}, ");
+                json.Append("\"driverDeltaAttribution\": \"the driver delta covers backend construction AND a LoadBoard; the two explicit state buffers account for 8 bytes per cell, and the rest is NOT attributed to anything -- no internal split was measured\", ");
+                json.Append("\"managedDeltaUsable\": false, ");
+                json.Append("\"managedDeltaNote\": \"the managed-heap delta is negative at small sizes and does not track the arrays that were allocated; it is not usable as an allocation measure and its cause was not established\", ");
+                json.Append("\"listedBufferCapacityBytes\": {");
+                json.Append($"\"cpuState\": {memory.CpuStateBytes}, ");
+                json.Append($"\"gpuStateBuffers\": {memory.GpuStateBuffersBytes}, ");
+                json.Append($"\"gpuStagingArrays\": {memory.GpuStagingArraysBytes}, ");
+                json.Append($"\"rendererUploadBuffer\": {memory.RendererUploadBufferBytes}, ");
+                json.Append($"\"rendererUploadScratch\": {memory.RendererUploadScratchBytes}, ");
+                json.Append($"\"benchBoard\": {memory.BenchBoardBytes}, ");
+                json.Append($"\"benchScratch\": {memory.BenchScratchBytes}, ");
+                json.Append($"\"subtotal\": {memory.ListedSubtotalBytes}");
+                json.Append("}, ");
+                json.Append("\"listedBufferCapacityNote\": \"a subtotal of the buffers this probe enumerates, from the source. It is NOT the application's live total and NOT a peak: it omits, among others, the seeding session's two board arrays, the controller's initial state and pattern board, and the renderer's viewport texture, while counting a readback pool that only exists during measurement\"");
+                json.Append("}, ");
+            }
 
             json.Append($"\"utc\": \"{DateTime.UtcNow:O}\"");
             json.Append('}');
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string path = Path.Combine(projectRoot, "stage-c-bench-r3.jsonl");
+            string path = Path.Combine(projectRoot, "stage-c-bench-r4.jsonl");
             File.AppendAllText(path, json + Environment.NewLine);
             Debug.Log($"[stage-c-bench] appended {width}x{height} ({backendName}) to {path}");
             Debug.Log($"[stage-c-bench] {json}");
@@ -1047,7 +1156,9 @@ namespace ConwayGameOfLife
             json.Append($"\"generationsAdvanced\": {scenario.GenerationsAdvanced}, ");
             json.Append($"\"requestedGenerationsPerSecond\": {scenario.RequestedGenerationsPerSecond}, ");
             json.Append($"\"achievedGenerationsPerSecond\": {F(scenario.GenerationsPerSecond)}, ");
+            json.Append("\"achievedGenerationsPerSecondBasis\": \"the benchmark's own count: the board's generation at the end minus its generation at the start, divided by the wall clock between those two readings\", ");
             json.Append($"\"controllerReportedGenerationsPerSecond\": {F(scenario.ControllerAchievedGenerationsPerSecond)}, ");
+            json.Append($"\"controllerRateSampleFormed\": {Bool(scenario.ControllerRateSampleFormed)}, ");
             json.Append($"\"controllerClockOverloaded\": {Bool(scenario.ControllerOverloaded)}, ");
             json.Append($"\"frames\": {StatsOrNull(scenario.Frames)}, ");
             json.Append($"\"framesPerSecond\": {F(scenario.FramesPerSecond)}, ");
@@ -1097,5 +1208,25 @@ namespace ConwayGameOfLife
             stats.Count == 0 || stats.MedianMs <= 0.0
                 ? "null"
                 : F(cells / (stats.MedianMs / 1000.0));
+
+        /// <summary>The axes this run measured, as JSON strings.</summary>
+        private static string PhaseList(bool frameScenariosOnly) =>
+            frameScenariosOnly
+                ? "\"frame-scenarios\""
+                : string.Join(", ", Array.ConvertAll(AllPhases, phase => $"\"{phase}\""));
+
+        /// <summary>The axes this run did not measure, as JSON strings.</summary>
+        private static string SkippedPhaseList(bool frameScenariosOnly) =>
+            frameScenariosOnly
+                ? string.Join(", ", Array.ConvertAll(
+                    Array.FindAll(AllPhases, phase => phase != "frame-scenarios"), phase => $"\"{phase}\""))
+                : string.Empty;
+
+        private static string PhasesNote(bool frameScenariosOnly) =>
+            frameScenariosOnly
+                ? "this run measured ONLY the cross-frame scenarios (-lifeBenchScenarios frame); every " +
+                  "other axis is null and is named in phasesSkipped, because it was not measured in " +
+                  "this run -- null here never means zero"
+                : "this run measured every axis";
     }
 }

@@ -81,19 +81,43 @@ namespace ConwayGameOfLife
         // Clock overload protection. See Update for why there are two caps and what they mean.
         private const int MaxGenerationsPerFrame = 4;
         private const double GenerationBudgetMilliseconds = 6.0;
+
+        /// <summary>
+        /// Length of one rate-reporting window, in seconds. The window is TUMBLING, not sliding:
+        /// when it closes, the rate is published and both counters restart from zero, so the
+        /// figure describes that one segment rather than a trailing average.
+        /// </summary>
         private const double RateWindowSeconds = 0.5;
 
         private int rateWindowGenerations;
         private double rateWindowSeconds;
         private float achievedGenerationsPerSecond;
+        private bool achievedRateMeasured;
         private bool clockOverloaded;
 
         /// <summary>
-        /// Generations the backend actually retired per second, over the last half second.
-        /// With the clock capped this can sit below the slider's value, and the interface
-        /// says so rather than pretending the requested rate was achieved.
+        /// Generations retired during the previous frame. Held back until this frame's delta
+        /// arrives, so a window divides the generations of a set of frames by the time those
+        /// same frames took. See <see cref="TrackAchievedRate"/>.
+        /// </summary>
+        private int generationsRetiredLastFrame;
+
+        /// <summary>
+        /// Generations the backend actually retired per second, over the last CLOSED rate
+        /// window. With the clock capped this can sit below the slider's value, and the
+        /// interface says so rather than pretending the requested rate was achieved.
+        ///
+        /// <para>Zero until a window has closed: check <see cref="AchievedRateMeasured"/>
+        /// before reading zero as a measurement, because zero also means "nothing has been
+        /// measured yet".</para>
         /// </summary>
         public float AchievedGenerationsPerSecond => achievedGenerationsPerSecond;
+
+        /// <summary>
+        /// True once at least one rate window has closed since the clock last started,
+        /// stopped or changed backend. Until then there is no measured rate to report.
+        /// </summary>
+        public bool AchievedRateMeasured => achievedRateMeasured;
 
         /// <summary>True while the clock is discarding catch-up debt because it cannot keep up.</summary>
         public bool ClockOverloaded => clockOverloaded;
@@ -606,7 +630,10 @@ namespace ConwayGameOfLife
             // CPU evolution needs to move off the main thread.
             bool advanced = false;
             int stepped = 0;
-            var stepWatch = System.Diagnostics.Stopwatch.StartNew();
+
+            // Timestamps, not a Stopwatch object: this runs on every running frame, and a
+            // Stopwatch.StartNew() per frame allocates even on the frames that advance nothing.
+            long stepStartedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
             while (accumulator >= interval && stepped < MaxGenerationsPerFrame)
             {
@@ -615,7 +642,10 @@ namespace ConwayGameOfLife
                 advanced = true;
                 stepped++;
 
-                if (stepWatch.Elapsed.TotalMilliseconds >= GenerationBudgetMilliseconds)
+                double steppingMilliseconds =
+                    (System.Diagnostics.Stopwatch.GetTimestamp() - stepStartedTicks) * 1000.0 /
+                    System.Diagnostics.Stopwatch.Frequency;
+                if (steppingMilliseconds >= GenerationBudgetMilliseconds)
                     break;
             }
 
@@ -650,34 +680,68 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Generations actually retired per second, over a short sliding window. The slider
-        /// says what was ASKED for; this says what the backend manages on this board, which
-        /// is the number that matters once the clock can be overloaded.
+        /// Generations retired per second, published once per rate window. The slider says what
+        /// was ASKED for; this says what the backend manages on this board, which is the number
+        /// that matters once the clock can be overloaded.
+        ///
+        /// <para><b>What is divided by what.</b> The generations in a window are the ones retired
+        /// during the frames that window covers, divided by the time those same frames took --
+        /// which is why the count is held back by one frame. Stepping done in frame k is only
+        /// charged to the clock when frame k's own cost arrives, as frame k+1's delta. Dividing
+        /// this frame's steps by the time accumulated up to this frame's START would charge the
+        /// work to a period that excludes it. On a steady board the two pairings cover the same
+        /// frames shifted by one and agree; the difference appears where the frame cost changes
+        /// -- the frames around a start, a pause or a spike, which is where a wrong pairing
+        /// reads high.</para>
+        ///
+        /// <para><b>The window is tumbling, not sliding.</b> It is closed and restarted from
+        /// zero, so the published number is one segment's average, not a trailing one. Until the
+        /// first window closes, <see cref="AchievedRateMeasured"/> is false and the panel says it
+        /// is still sampling rather than showing the initialised zero as a measurement.</para>
+        ///
+        /// <para>A window shorter than the clock's own interval can contain no generation at all,
+        /// so on a backend that cannot reach the requested rate the figure moves in steps of
+        /// roughly one generation per window. It is a report, not a precision instrument.</para>
         /// </summary>
-        private void TrackAchievedRate(int stepped)
+        private void TrackAchievedRate(int retiredThisFrame)
         {
-            rateWindowGenerations += stepped;
+            rateWindowGenerations += generationsRetiredLastFrame;
+            generationsRetiredLastFrame = retiredThisFrame;
             rateWindowSeconds += Time.unscaledDeltaTime;
 
             if (rateWindowSeconds < RateWindowSeconds)
                 return;
 
             achievedGenerationsPerSecond = (float)(rateWindowGenerations / rateWindowSeconds);
+            achievedRateMeasured = true;
             rateWindowGenerations = 0;
             rateWindowSeconds = 0.0;
             RefreshState();
         }
 
         /// <summary>
-        /// Forgets the clock's outstanding debt. Called wherever the board is replaced or the
-        /// clock is stopped: carrying debt across a reset or a pause would make the next frame
-        /// replay generations that belong to a board which no longer exists.
+        /// Ends the clock state of the run that just finished: the outstanding debt, the rate
+        /// window in progress, the published rate, and the overload flag.
+        ///
+        /// <para>Called wherever the board is replaced or the clock is stopped or started --
+        /// pause, reset, backend switch. Carrying debt across any of those would make a later
+        /// frame replay time that belongs to a board or a clock that no longer exists.</para>
+        ///
+        /// <para>The rate report goes with the debt because it describes the run that ended.
+        /// Keeping it would leave the previous run's rate and overload warning on screen until
+        /// the new window closed half a second later -- so a slow CPU backend switching to the
+        /// GPU would still be claiming to be overloaded, and a fresh run would show the old
+        /// run's rate as if it had already been measured.</para>
         /// </summary>
-        private void ClearClockDebt()
+        private void ResetClockState()
         {
             accumulator = 0f;
             rateWindowGenerations = 0;
             rateWindowSeconds = 0.0;
+            generationsRetiredLastFrame = 0;
+            achievedGenerationsPerSecond = 0f;
+            achievedRateMeasured = false;
+            clockOverloaded = false;
         }
 
         /// <summary>
@@ -1238,8 +1302,9 @@ namespace ConwayGameOfLife
                 Stop();
 
             // A backend switch changes how long a generation costs, so any debt the old
-            // backend accumulated says nothing about the new one.
-            ClearClockDebt();
+            // backend accumulated says nothing about the new one -- and neither does the rate
+            // it published.
+            ResetClockState();
 
             useGpu = gpu;
             ApplyBackend();
@@ -1360,16 +1425,17 @@ namespace ConwayGameOfLife
 
             running = !running;
 
-            // Starting fresh or stopping both drop any debt: a pause must not be followed by
-            // a burst of generations the clock owed before it was paused.
-            ClearClockDebt();
+            // Starting fresh or stopping both drop the old clock state: a pause must not be
+            // followed by a burst of generations the clock owed before it was paused, and a
+            // resumed run must not wear the paused run's rate or overload warning.
+            ResetClockState();
             RefreshState();
         }
 
         private void Stop()
         {
             running = false;
-            ClearClockDebt();
+            ResetClockState();
             RefreshState();
         }
 
@@ -1417,14 +1483,29 @@ namespace ConwayGameOfLife
         {
             playButton.text = running ? "Ⅱ 暂停" : "▶ 运行";
 
-            // Target and achieved are different numbers as soon as the clock can be
-            // overloaded, so the panel shows both instead of reporting the slider's value as
-            // if it were what the board is doing.
+            // Target and achieved are different numbers as soon as the clock can be overloaded,
+            // so the panel shows both instead of reporting the slider's value as if it were what
+            // the board is doing.
+            //
+            // The achieved figure only exists once a window has closed. The initialised zero is
+            // NOT a measurement, so the run says it is still sampling instead -- otherwise every
+            // start and every resume would flash "实际 0/秒".
             if (!running)
             {
                 stateLabel.text = "已暂停";
             }
-            else if (clockOverloaded || achievedGenerationsPerSecond + 0.5f < speedSlider.value)
+            else if (clockOverloaded)
+            {
+                // Overload is reported the frame it starts, without waiting for a window.
+                stateLabel.text = achievedRateMeasured
+                    ? $"演算中 · 实际 {achievedGenerationsPerSecond:0.#}/秒"
+                    : "演算中 · 丢弃追赶欠账";
+            }
+            else if (!achievedRateMeasured)
+            {
+                stateLabel.text = "演算中 · 采样中";
+            }
+            else if (achievedGenerationsPerSecond + 0.5f < speedSlider.value)
             {
                 stateLabel.text = $"演算中 · 实际 {achievedGenerationsPerSecond:0.#}/秒";
             }
@@ -1433,12 +1514,7 @@ namespace ConwayGameOfLife
                 stateLabel.text = "演算中";
             }
 
-            stateLabel.tooltip = running
-                ? $"目标 {speedSlider.value} 代/秒；实际 {achievedGenerationsPerSecond:0.#} 代/秒。" +
-                  (clockOverloaded
-                      ? "后端跟不上目标速率，时钟正在丢弃追赶欠账（不跳过任何演化步骤，只是变慢）。"
-                      : string.Empty)
-                : string.Empty;
+            stateLabel.tooltip = running ? StateTooltip() : string.Empty;
 
             if (!gpuAvailable)
             {
@@ -1450,6 +1526,23 @@ namespace ConwayGameOfLife
                 statusLabel.text = running ? "●  演算进行中" : "●  待机中";
                 statusLabel.tooltip = renderer == null ? "显示回退：逐格绘制" : string.Empty;
             }
+        }
+
+        /// <summary>
+        /// Says which run the numbers belong to. A tooltip rather than the readout, because the
+        /// state line is one short row and the distinction it has to make -- measured, still
+        /// sampling, or measured but overloaded -- does not fit there.
+        /// </summary>
+        private string StateTooltip()
+        {
+            string measured = achievedRateMeasured
+                ? $"实际 {achievedGenerationsPerSecond:0.#} 代/秒（最近一个 {RateWindowSeconds:0.0} 秒窗口）"
+                : $"速率窗口 {RateWindowSeconds:0.0} 秒尚未形成，实际速率尚未测出";
+
+            return $"目标 {speedSlider.value} 代/秒；{measured}。" +
+                   (clockOverloaded
+                       ? "后端跟不上目标速率，时钟正在丢弃追赶欠账（不跳过任何演化步骤，只是变慢）。"
+                       : string.Empty);
         }
 
         /// <summary>
