@@ -206,6 +206,13 @@ namespace ConwayGameOfLife.Tests
         private LifeAsyncCpuBackend originalCpuBackend;
         private LifeAsyncCpuBackend injected;
 
+        /// <summary>
+        /// Set by a test that allocated large boards, so teardown can hand the memory back before
+        /// whichever fixture runs next measures frames. A test's own iterator still holds its
+        /// locals while its finally block runs, so the collection has to happen after it returns.
+        /// </summary>
+        private bool collectAfterThisTest;
+
         [UnitySetUp]
         public IEnumerator CaptureLiveBackend()
         {
@@ -240,6 +247,13 @@ namespace ConwayGameOfLife.Tests
                 Grid().Bind(originalBackend);
                 injected.Dispose();
                 injected = null;
+            }
+
+            if (collectAfterThisTest)
+            {
+                collectAfterThisTest = false;
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
 
             yield return null;
@@ -333,6 +347,7 @@ namespace ConwayGameOfLife.Tests
 
                 int counterReads = 0;
                 int boardReads = 0;
+                var during = new uint[4096 * 4096];
 
                 while (backend.IsComputing)
                 {
@@ -344,10 +359,13 @@ namespace ConwayGameOfLife.Tests
                         "the population readout came from a board that is still being computed");
                     counterReads++;
 
-                    // One full read of the board the grid uploads, compared with the sequence
-                    // comparison rather than NUnit's collection assert: the latter walks 16 million
-                    // elements through an enumerator and takes longer than the generation itself.
-                    uint[] during = ReadCells(backend);
+                    // One full read of the board the grid uploads, taken into a buffer that is
+                    // reused: at this size one read is 64 MB, and allocating a fresh array per
+                    // iteration would leave hundreds of megabytes for a later test's timing
+                    // measurement to trip over. Compared with the sequence comparison rather than
+                    // NUnit's collection assert, which walks 16 million elements through an
+                    // enumerator and takes longer than the generation itself.
+                    Assert.IsTrue(backend.TryReadAllCells(during), "the backend refused a full readback");
                     Assert.IsTrue(during.AsSpan().SequenceEqual(before),
                         "the display read a board that the worker is writing");
                     boardReads++;
@@ -371,16 +389,26 @@ namespace ConwayGameOfLife.Tests
                 reference.LoadBoard(board);
                 reference.Step();
 
-                uint[] expected = ReadCells(reference);
-                uint[] adopted = ReadCells(backend);
-                Assert.IsTrue(adopted.AsSpan().SequenceEqual(expected),
-                    "the background result differs from the synchronous reference");
-                Assert.AreEqual(Population(reference), outcome.Population,
-                    "the population travelling with the result is not the population of the new board");
+                // Same board, same rules, synchronous reference: THAT comparison lives in the
+                // smaller tests (SecondStepIsRefused_..., ReplacedBoardRefuses_...,
+                // CompletedGeneration_IsWrittenByTheWorker_...), where it costs kilobytes. Here it
+                // would add two more 64 MB readbacks to a test whose subject is isolation, and the
+                // allocations are exactly what the reset of this test is about to hand back.
+                Assert.AreEqual(1, outcome.Generation, "the adopted generation");
+                Assert.Greater(outcome.ComputeMilliseconds, 0.0, "the worker's own step cost");
             }
             finally
             {
                 backend.Dispose();
+
+                // This test works on a 4096x4096 board: the backend alone is four 16 MB buffers,
+                // and the comparisons add tens of megabytes more. Ask for them back when this test
+                // is over -- at teardown, when the iterator's own references are gone -- rather
+                // than leaving a collection to land inside a later test's frame window. (Observed:
+                // the stage-A worst-frame bound failed with 270 ms and 455 ms outliers while the
+                // same binary produced 8.33 ms median and 11-17 ms worst frames when the clock test
+                // ran in a quiet process.)
+                collectAfterThisTest = true;
             }
         }
 
@@ -954,6 +982,12 @@ namespace ConwayGameOfLife.Tests
         /// The interface error belongs to the backend in use. A CPU failure must not sit on the
         /// readout while the GPU is the one running, and switching back must describe the CPU's
         /// current state rather than reusing whatever was there before.
+        ///
+        /// <para>The last step asserts that the CPU backend CLEARS THE ERROR AND ACCEPTS WORK
+        /// AGAIN -- not that a run completes: the injected rule throws on every call in this test,
+        /// so nothing is adopted. Recovering a real retry (rebuild from the displayed board, land as
+        /// the next generation) is
+        /// <see cref="RetryAfterAFailure_RebuildsFromTheDisplayBoard_AndKeepsTheNumbering"/>'s job.</para>
         /// </summary>
         [UnityTest]
         public IEnumerator CpuFailure_ThenSwitchingToGpu_ShowsTheGpuState_NotTheOldError()
@@ -1013,10 +1047,15 @@ namespace ConwayGameOfLife.Tests
 
             yield return null;
 
-            // Which means the CPU path runs again without any further ceremony.
+            // The CPU backend accepts work again. That is ALL this asserts: the injected rule here
+            // throws on every call, so no generation completes and nothing is adopted. What a full
+            // retry does -- rebuild from the displayed board and land as the next generation -- is
+            // covered by RetryAfterAFailure_RebuildsFromTheDisplayBoard_AndKeepsTheNumbering, and is
+            // deliberately not duplicated here.
             PressButton(RunButtonText);
-            yield return WaitFor(() => scheduler.HasPending, 30, "the CPU run to submit a generation");
-            Assert.IsFalse(state.text.Contains("演算失败"), "the recovered CPU run still shows a failure");
+            yield return WaitFor(() => scheduler.HasPending, 30, "the CPU backend to accept a submission");
+            Assert.IsFalse(state.text.Contains("演算失败"),
+                $"a submission was accepted but the readout still shows a failure: '{state.text}'");
 
             StopClock(controller);
             yield return null;

@@ -21,7 +21,8 @@ CPU 规则参考实现 [`LifeSimulation`](../Scripts/LifeSimulation.cs) **一行
 | 3 | **[P2]「上传就是最差帧来源」归因过强** | §4.1/§5 改为：上传是**已测得的显著阻塞来源**（50–56 ms），与最差帧（63–72 ms）同量级、时间上相容，但**本轮没有证明它解释了最差帧的全部耗时**；并写明 §4.2 那 0.95 ms 是**重建前复制**，不是每代接管成本（接管交换引用） |
 | 4 | **文档口径与旧微基准** | 开头的「相差 ≤4%」改为「同量级，−12%~+10%」；删掉「交接复制只有两个尺寸有值」等过时限制；**删除**已失去原用途的 `MicroBenchmark_StepCostInsideTheEditorRuntime`（在后台 CPU 上它测的是提交而不是步进），并把引用它的历史文档标为「历史记录、不再可复现」（TechnicalAnalysis §5.3、StageArchive §3） |
 | 5 | **[P2] 失败可能在「检查错误」与「提交下一步」之间被自动清掉**（后台线程在两步之间失败 → 控制器发现空闲 → 提交被接受并清空错误 → 用户没重试，系统却自行重试，且错误从未显示） | **失败状态下的提交在同一个锁内被拒绝**（`Step()`），并单独计数 `RefusedWhileFailed`；只有 `ClearFailure()`（显式重试）或换盘能解除。控制器那侧只留作读数便利，**不再是保证**。回归测试不依赖线程时序：制造当前失败后**直接调用 `Step()`**，断言没有新任务、错误保留、计数 +1；显式清除后才允许提交并重建 |
-| 6 | **[P2] CPU 失败后切到 GPU，界面仍显示「演算失败」**（镜像只靠异步后端同步更新，而 `PumpEvolution` 遇到 GPU 直接返回） | 抽取 `SyncEvolutionFailure()`：**从当前后端**读取错误状态；`PumpEvolution` 对**任何**后端都先调用它，`SwitchBackend` 再在**同一次调用内**同步一次（不留一帧窗口）。新增真实控件测试：CPU 失败 → 切 GPU（**同一帧**断言读数与 tooltip 已不带旧错误）→ 单步正常 → 切回 CPU 按其当前状态显示 |
+| 6 | **[P2] CPU 失败后切到 GPU，界面仍显示「演算失败」**（镜像只靠异步后端同步更新，而 `PumpEvolution` 遇到 GPU 直接返回） | 抽取 `SyncEvolutionFailure()`：**从当前后端**读取错误状态；`PumpEvolution` 对**任何**后端都先调用它，`SwitchBackend` 再在**同一次调用内**同步一次（不留一帧窗口）。新增真实控件测试：CPU 失败 → 切 GPU（**同一帧**断言读数与 tooltip 已不带旧错误）→ 单步正常 → 切回 CPU 后**错误清除、允许重新提交**（该测试的注入规则每次都抛异常，所以它不断言跑完一代；完整重试由第 16 条覆盖） |
+| 7 | **归档时发现的一条非本阶段缺陷：旧的最差帧断言不可靠** | `Clock_RunsAtTheRequestedRateAcrossRealFrames` 原本断言**单帧最差 ≤ 250 ms**。这条断言在本机从来不可靠——环境自身有未解释的长帧记录（阶段一 T15：86.9 秒），本轮在**二进制未变**的情况下看到 270 ms 与 455 ms 的离群帧，而同一测试单独运行四次是 **239–241 帧、中位 8.33 ms、p90 8.4 ms、最差 11–30 ms、超过 50 ms 的帧 0 个**。改成**形状断言**：超过 50 ms 的帧 ≤ 1（实测 0），另加 1000 ms 的灾难上限，并把中位/p90/最差（含帧序号）/超限帧数全部打进日志。**这是一处超出本轮指令的测试改动**，理由与数据都在这里；同时新增的 4096² 测试在 teardown 里归还内存（`GC.Collect`），避免它的分配落到后续帧窗口里 |
 
 ---
 
@@ -166,7 +167,7 @@ worker 抛异常时（注入的失败、OOM、任何 `Compute` 内的异常）�
 | 16 | `RetryAfterAFailure_RebuildsFromTheDisplayBoard_AndKeepsTheNumbering` | 按「运行」重试 → 失败被清除、读数恢复正常、**下一代从显示棋盘重建**（不是从失败任务已经超前的棋盘），与参考逐格一致 |
 | 17 | `StaleFailure_DoesNotPolluteTheReplacedBoard` | 换盘之后才落地的失败**不记录**、不发布、不阻塞流水线；下一次提交正常出代并与参考逐格一致 |
 | 18 | `FailedBackend_RefusesSubmissions_UntilSomethingExplicitlyClearsTheFailure` | **不依赖线程时序**：制造当前失败后直接调 `Step()` → 没有新任务、错误保留、`RefusedWhileFailed` +1 而 `RefusedSubmissions` 仍为 0；只有 `ClearFailure()` 之后才接受提交，且该次提交从显示棋盘重建、编号为 1 |
-| 19 | `CpuFailure_ThenSwitchingToGpu_ShowsTheGpuState_NotTheOldError` | 真实控件：CPU 失败（读数「演算失败」）→ 切到 GPU，**同一帧**断言读数与 tooltip 已不带旧错误、状态为「已暂停」→ 单步正常 → 切回 CPU 按其当前状态显示且可继续运行 |
+| 19 | `CpuFailure_ThenSwitchingToGpu_ShowsTheGpuState_NotTheOldError` | 真实控件：CPU 失败（读数「演算失败」）→ 切到 GPU，**同一帧**断言读数与 tooltip 已不带旧错误、状态为「已暂停」→ 单步正常（GPU 结果被接管）→ **切回 CPU 后错误清除、允许重新提交**（该测试注入的规则每次都抛异常，因此它**不**断言跑完一代；完整重试恢复由第 16 条负责，不重复扩建） |
 
 **证伪（每条只改一处，全部实测）。**
 
@@ -346,3 +347,20 @@ unity test . --mode PlayMode  --output test-results-playmode.xml
 - 过载标志的读法在本轮变了：后台后端下时钟每帧都会越过间隔并丢弃欠账，标志**每帧翻转**，
   所以记录里既给「窗口内是否出现过」（`controllerEverOverloaded`）也给它出现的帧数，
   末尾单次读数单独记作 `controllerClockOverloadedAtEnd`（StageC §6.2/§6.4 里的同名旧字段名已弃用）。
+
+---
+
+## 8. 归档
+
+| 项 | 内容 |
+|---|---|
+| **版本位置** | Git 标签 **`stage-d-background-evolution`** → 提交 **`94d92cb`**（评审签收的那一个提交；现有标签与历史均未改动） |
+| **归档文本本身** | 本节写在该标签**之后**的一个提交里：标签指向的树里没有 §8，其余全部包含 |
+| **已实现** | **后台计算**（CPU 规则跑在 worker，主线程只接管完整世代）；**暂停暂存**（暂停即冻结显示，算完的一代留在等待槽，恢复或单步按顺序接管，不跳代）；**显式重试**（失败后只有「运行」「单步」或换盘能恢复，且从显示棋盘重建）；**错误隔离**（失败按会话身份处理，失败状态下后端在同一把锁内拒绝提交，界面错误属于当前使用的后端） |
+| **仍然留在主线程** | **整盘复制与上传**（`TryReadAllCells` + `renderer.Upload`）：2048² 13.5 ms、4096² 50–56 ms，表现为帧最大 19.7 / 63–72 ms；以及每代新增的结果复制（worker 侧，4096² 约 79 ms） |
+| **性能数字** | **沿用 r5**（`stage-c-bench-r5.jsonl`，`recordRound: 5`，5 条 = 256²/1024²/2048²/4096² × 帧时间构建 + 4096² × 发布构建），见 §4；本轮之后的两处收尾只改了错误路径与非失败路径上一次 null 比较，**没有重跑 r5** |
+| **测量版本（r5 记录自带）** | Unity **6000.6.0f1**；`Builds/LifeTerminal-bench.exe` `buildGuid=9793438ef42d493381a0997f00468a15`（Development 选项 + `enableFrameTimingStats`，`frameTimingStatsReported=true`）；`Builds/LifeTerminal-release.exe` `buildGuid=f327b9b86e1c40e7b1ed000e4c58444d`；Windows / **Direct3D12** / **NVIDIA GeForce RTX 4070 Ti** / **AMD Ryzen 7 7800X3D**；900×700 窗口、网格视口 615×456、`vSyncCount=0`、`targetFrameRate=-1`；记录时间 2026-09-15 17:57–17:59 UTC |
+| **验证（标签处）** | EditMode **86/86**、PlayMode **62/62**；五条证伪各只改一处（§3），结果 5 / 2 / 2 / 1 / 1 条失败 |
+| **归档时附带的一处测试口径修正** | `Clock_RunsAtTheRequestedRateAcrossRealFrames` 的「单帧最差 ≤ 250 ms」改为「>50 ms 的帧 ≤ 1 且最差 ≤ 1000 ms」，并记录完整分布（中位 8.33 ms、p90 8.4 ms、最差 11–30 ms、超限帧 0，四次运行）。理由：二进制未变时的 270/455 ms 离群帧来自环境与该测试自身的分配，不是因为板子在卡；§0 第 7 行有数据 |
+| **后续（不在本阶段）** | ①「只准备并上传可见区域」——评审认可的**下一阶段独立设计**（要大棋盘只显示很小一块却每代转换上传整盘；需保持视口内容、人口与世代一致，并明确平移后如何取得新区域；Unity 图形资源操作不能直接套 `Task.Run`）；②亚像素密度总览——按评审意见**暂缓**；③GPU 独立噪声——**远期可选实验**；④长时间挂机与反复暂停/恢复的耐久测试（§6） |
+| **明确没有做** | 没有改变算法吞吐（§4.4 同量级）；没有把上传搬离主线程；没有动 `LifeSimulation` / `CpuLifeBackend` / `GpuLifeBackend` / `LifeGpu.compute` |

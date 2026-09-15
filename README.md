@@ -247,6 +247,13 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 > `.verify/`、`test-results-*.xml` 与根目录的图表工件都不在 `Assets/` 下，
 > 不会被 Unity 导入，也不进入构建产物。
 
+> **阶段 D 已归档**，标签 `stage-d-background-evolution`（提交 `94d92cb`，评审签收的版本；
+> 标签与历史未改动）。后台计算、暂停暂存、显式重试与错误隔离已实现；
+> **整盘复制与上传仍在主线程**；性能数字沿用 `stage-c-bench-r5.jsonl`（`recordRound: 5`，
+> Unity 6000.6.0f1 / D3D12 / RTX 4070 Ti / 7800X3D / 900×700，两个构建的 `buildGuid` 写在归档里）。
+> 清单、范围与后续项见
+> [`Assets/Docs/StageD-BackgroundEvolution.md`](Assets/Docs/StageD-BackgroundEvolution.md) §8。
+
 ---
 
 ## 7. 归档清单（阶段一）
