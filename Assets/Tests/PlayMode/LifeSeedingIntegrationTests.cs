@@ -97,6 +97,24 @@ namespace ConwayGameOfLife.Tests
             Press(button);
         }
 
+        /// <summary>
+        /// Presses "▸ 单步" and waits for the generation to land.
+        ///
+        /// <para>Since stage D the CPU path computes off the frame: the press submits a generation
+        /// and the counter moves when the controller takes the result over. The GPU path still
+        /// advances inside the press, in which case this returns without yielding.</para>
+        /// </summary>
+        private static IEnumerator StepOnce(VisualElement root, ILifeBackend backend)
+        {
+            int before = backend.Generation;
+            PressButton(root, "▸ 单步");
+
+            for (int frame = 0; frame < 300 && backend.Generation == before; frame++)
+                yield return null;
+
+            Assert.AreEqual(before + 1, backend.Generation, "单步 did not advance the generation counter");
+        }
+
         private static void PaintCell(LifeGridElement grid, int x, int y)
         {
             MethodInfo seam = typeof(LifeGridElement).GetMethod(
@@ -388,9 +406,8 @@ namespace ConwayGameOfLife.Tests
             LifeGridElement grid = Grid(root);
 
             ILifeBackend backend = ReadBackend(controller);
-            backend.Step();
-            backend.Step();
-            yield return null;
+            yield return StepOnce(root, backend);
+            yield return StepOnce(root, backend);
             Assert.AreEqual(2, backend.Generation);
 
             yield return PreviewWith(controller, 31337);
@@ -554,8 +571,7 @@ namespace ConwayGameOfLife.Tests
             uint[] seeded = ReadCells(backend);
 
             for (int i = 0; i < 3; i++)
-                backend.Step();
-            yield return null;
+                yield return StepOnce(root, backend);
 
             PressButton(root, "↺ 重置");
             yield return null;
@@ -589,8 +605,7 @@ namespace ConwayGameOfLife.Tests
                 Assert.AreEqual(0u, cell, "density 0 must seed an empty board");
 
             for (int i = 0; i < 5; i++)
-                backend.Step();
-            yield return null;
+                yield return StepOnce(root, backend);
 
             CollectionAssert.AreEqual(empty, ReadCells(backend),
                 "an empty board must stay empty: evolution cannot be reading the noise field");
@@ -640,8 +655,7 @@ namespace ConwayGameOfLife.Tests
             // Enabled is not the same as working: press the controls and check the effect.
             yield return PauseTheClock(root);
             int paused = backend.Generation;
-            PressButton(root, "▸ 单步");
-            yield return null;
+            yield return StepOnce(root, backend);
             Assert.AreEqual(paused + 1, backend.Generation,
                 "单步 must still work after editing parameters outside a preview");
         }

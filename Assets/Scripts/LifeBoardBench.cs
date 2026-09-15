@@ -16,7 +16,7 @@ namespace ConwayGameOfLife
     /// <summary>
     /// Stage-C large-board benchmark. Activated with "-lifeBench" together with
     /// "-lifeBoard WxH"; measures the board the Player was launched with, appends one JSON
-    /// line to <c>stage-c-bench-r4.jsonl</c> and quits. One process per board size, so each
+    /// line to <c>stage-c-bench-r5.jsonl</c> and quits. One process per board size, so each
     /// size gets a fresh allocator and a fresh peak, which is the only way a memory figure
     /// for a size means anything.
     ///
@@ -45,7 +45,11 @@ namespace ConwayGameOfLife
     /// frame-timing samples and valid-sample counts: paused, paused with a forced repaint
     /// every frame, normal evolution, and normal evolution on the CPU backend. Each scenario
     /// records the rate the benchmark itself counted over its own wall clock <b>and</b> the
-    /// rate the controller published, side by side.</item>
+    /// rate the controller published, side by side -- and, when the CPU backend computes on a
+    /// worker (stage D), what the WORKER paid (rule step, result read-out) separately from what
+    /// the MAIN THREAD paid (board handover, display upload). A <c>pauseResponse</c> block
+    /// records the pause command, whether a generation was in flight when it arrived, whether
+    /// the display froze, and whether the finished generation was kept for the resume.</item>
     /// <item><b>memory</b> -- the capacity of the buffers this probe enumerates (from the
     /// source), the measured graphics-driver delta for one more board, and the difference
     /// between them marked <b>unattributed</b>. No internal split is claimed, because the
@@ -59,7 +63,7 @@ namespace ConwayGameOfLife
     public sealed class LifeBoardBench : MonoBehaviour
     {
         /// <summary>Round of the measurement contract that produced a record.</summary>
-        private const int RecordRound = 4;
+        private const int RecordRound = 5;
 
         /// <summary>The axes a full run measures. A run that names a subset records that.</summary>
         private static readonly string[] AllPhases =
@@ -271,6 +275,7 @@ namespace ConwayGameOfLife
             int requestedGenerationsPerSecond = SetSpeed(controller, 20);
 
             var scenarios = new List<ScenarioResult>();
+            PauseResponseFacts pauseResponse = null;
 
             // 1. paused, nothing changes.
             active.LoadBoard(board);
@@ -328,6 +333,13 @@ namespace ConwayGameOfLife
                         minGenerations: 1, captureFrameTimings: true);
                     Phase("scenario-running-cpu-backend", ref phaseStartedAt);
                     SetRunning(controller, false);
+
+                    // Pause response, on the same backend and board: the scenario above says what
+                    // the interface paid while the worker computed, this says what pausing during a
+                    // computation costs and what happens to the generation that was in flight.
+                    pauseResponse = new PauseResponseFacts();
+                    yield return MeasurePauseResponse(pauseResponse);
+                    Phase("pause-response", ref phaseStartedAt);
                 }
 
                 SwitchBackend(controller, gpu: true);
@@ -361,9 +373,9 @@ namespace ConwayGameOfLife
             bool focusedAtEnd = Application.isFocused;
 
             WriteLine(frameScenariosOnly, width, height, cells, active?.Name ?? "unknown", boardIdentifiedAs,
-                fbm, uniform, cpuLoad, gpuLoad, cpuRules, gpuSubmit, gpuBatch, display, scenarios, memory,
-                configuredVSync, configuredTargetFrameRate, focusedAtStart && focusedAtEnd,
-                Time.realtimeSinceStartup - startedAt);
+                fbm, uniform, cpuLoad, gpuLoad, cpuRules, gpuSubmit, gpuBatch, display, scenarios,
+                pauseResponse, memory, configuredVSync, configuredTargetFrameRate,
+                focusedAtStart && focusedAtEnd, Time.realtimeSinceStartup - startedAt);
 
             // runInBackground is deliberately NOT restored here: an unfocused player that is not
             // running in the background does not process this quit. See the note where it is set.
@@ -637,12 +649,34 @@ namespace ConwayGameOfLife
             public float ControllerAchievedGenerationsPerSecond;
             public bool ControllerRateSampleFormed;
             public bool ControllerOverloaded;
+
+            /// <summary>
+            /// The overload flag sampled over the whole window, not just read at the end. With a
+            /// background backend the clock crosses its interval once per frame and drops the debt
+            /// each time, so the flag flips on and off many times inside one generation: a single
+            /// read at the end of the scenario is a coin flip, while "was it ever set" and "how
+            /// many frames was it set" describe the window.
+            /// </summary>
+            public bool ControllerEverOverloaded;
+            public int ControllerOverloadFrames;
             public double FirstDecileFrameMedianMs;
             public double LastDecileFrameMedianMs;
             public double? EdgeDecileRatio;
             public bool CutOffBySafetyCap;
             public int FramesWhereGridUploadCostWasNonZero;
             public LifeBenchStatistics.Summary GridReportedUploadMs;
+
+            // Stage D: what a background backend costs where. The frame statistics above say what
+            // the interface paid; these say what the worker paid, and the handover copy says what
+            // the main thread paid to feed it. They are never added together into "the cost of a
+            // generation", because they happen on different threads at different moments.
+            public bool BackgroundBackend;
+            public int BackgroundAdoptionsObserved;
+            public LifeBenchStatistics.Summary BackgroundComputeMs;
+            public LifeBenchStatistics.Summary BackgroundResultCopyMs;
+            public LifeBenchStatistics.Summary BackgroundHandoverCopyMs;
+            public int BackgroundRefusedGenerationsAtEnd;
+            public int BackgroundRefusedSubmissionsAtEnd;
 
             // Frame timings. Three different counts, because round 2 collapsed them into one
             // and then called the number "requested frames":
@@ -702,6 +736,15 @@ namespace ConwayGameOfLife
             var uploads = new List<double>();
             var timings = new FrameTiming[Math.Min(maxFrames, 200)];
 
+            // Stage D: a background backend retires generations between frames, so the worker's own
+            // costs are collected as each adoption is observed rather than sampled per frame.
+            var asyncBackend = backend as ILifeAsyncBackend;
+            var computeSamples = new List<double>();
+            var resultCopySamples = new List<double>();
+            var handoverSamples = new List<double>();
+            int adoptionsSeen = asyncBackend?.AdoptedGenerations ?? 0;
+            result.BackgroundBackend = asyncBackend != null;
+
             // One discarded frame so the first sample is not the frame that started this.
             yield return null;
 
@@ -719,6 +762,27 @@ namespace ConwayGameOfLife
                 yield return null;
 
                 samples.Add(Time.unscaledDeltaTime * 1000.0);
+
+                if (controllerRef != null && controllerRef.ClockOverloaded)
+                {
+                    result.ControllerEverOverloaded = true;
+                    result.ControllerOverloadFrames++;
+                }
+
+                if (asyncBackend != null && asyncBackend.AdoptedGenerations != adoptionsSeen)
+                {
+                    adoptionsSeen = asyncBackend.AdoptedGenerations;
+                    result.BackgroundAdoptionsObserved++;
+                    computeSamples.Add(asyncBackend.LastComputeMilliseconds);
+                    resultCopySamples.Add(asyncBackend.LastResultCopyMilliseconds);
+
+                    // The main-thread handover copy that rebuilt the worker's simulation for this
+                    // run. Taken once, on the first adoption seen: whether it happened just before
+                    // this window or inside it, it is the copy this scenario's generations were
+                    // computed from.
+                    if (handoverSamples.Count == 0 && asyncBackend.LastResyncCopyMilliseconds > 0.0)
+                        handoverSamples.Add(asyncBackend.LastResyncCopyMilliseconds);
+                }
 
                 // The production path reports its own upload cost. The counter is sticky, so
                 // this counts FRAMES whose reported cost was non-zero, which is not a count of
@@ -767,6 +831,21 @@ namespace ConwayGameOfLife
             result.ControllerRateSampleFormed = controllerRef != null && controllerRef.AchievedRateMeasured;
             result.ControllerOverloaded = controllerRef != null && controllerRef.ClockOverloaded;
 
+            if (asyncBackend != null)
+            {
+                if (computeSamples.Count > 0)
+                    result.BackgroundComputeMs = LifeBenchStatistics.Summarise(computeSamples);
+
+                if (resultCopySamples.Count > 0)
+                    result.BackgroundResultCopyMs = LifeBenchStatistics.Summarise(resultCopySamples);
+
+                if (handoverSamples.Count > 0)
+                    result.BackgroundHandoverCopyMs = LifeBenchStatistics.Summarise(handoverSamples);
+
+                result.BackgroundRefusedGenerationsAtEnd = asyncBackend.RefusedGenerations;
+                result.BackgroundRefusedSubmissionsAtEnd = asyncBackend.RefusedSubmissions;
+            }
+
             if (uploads.Count > 0)
                 result.GridReportedUploadMs = LifeBenchStatistics.Summarise(uploads);
 
@@ -807,6 +886,115 @@ namespace ConwayGameOfLife
                       $"frame timings captured {result.FrameTimingsCaptureCalls}x, returned " +
                       $"{result.ValidGpuFrameTimingSamples} gpu / {result.ValidCpuFrameTimingSamples} cpu " +
                       $"of cap {result.FrameTimingsReturnCap}");
+        }
+
+        /// <summary>
+        /// What a pause costs while the background CPU backend is computing. The pause semantics
+        /// are a product decision (see the stage-D document), and this is the record of them: the
+        /// command itself, whether a generation was in flight, whether the display froze, whether
+        /// the finished generation was kept for the resume, and what the frames after the pause
+        /// cost.
+        /// </summary>
+        private sealed class PauseResponseFacts
+        {
+            public bool Measured;
+            public string Backend;
+            public string Board;
+            public bool StepInFlightAtPause;
+            public double PauseCommandMs;
+            public int GenerationsBefore;
+            public int GenerationImmediatelyAfterPause;
+            public int GenerationAfterPauseObservation;
+            public int FramesObservedAfterPause;
+            public LifeBenchStatistics.Summary FramesAfterPause;
+            public bool CompletionWaitingWhilePaused;
+            public bool AdvancedByOneOnResume;
+            public int GenerationAfterResume;
+            public int RefusedGenerationsAtEnd;
+            public double ObservationSeconds;
+
+            /// <summary>True when the display did not move while the clock was paused.</summary>
+            public bool DisplayFrozen => GenerationAfterPauseObservation == GenerationImmediatelyAfterPause;
+        }
+
+        /// <summary>How long to wait for a generation to be in flight before pausing.</summary>
+        private const float PauseCatchSeconds = 2.0f;
+
+        /// <summary>How long the frames right after the pause are observed, at minimum.</summary>
+        private const float PauseObservationSeconds = 0.5f;
+
+        /// <summary>
+        /// How long to keep observing when a generation was in flight: it has to finish somewhere,
+        /// and at 4096x4096 that takes most of a second.
+        /// </summary>
+        private const float PauseStashWaitSeconds = 4.0f;
+
+        private IEnumerator MeasurePauseResponse(PauseResponseFacts facts)
+        {
+            if (controllerRef == null || gridRef?.Backend is not ILifeAsyncBackend backend)
+                yield break;
+
+            facts.Measured = true;
+            facts.Backend = gridRef.Backend.Name;
+            facts.Board = $"{gridRef.Backend.Width}x{gridRef.Backend.Height}";
+
+            // Run until a generation is in flight. A fast board (256x256) finishes between frames,
+            // so not catching one is a legitimate outcome and is recorded as such.
+            SetRunning(controllerRef, true);
+            float catchUntil = Time.realtimeSinceStartup + PauseCatchSeconds;
+            while (Time.realtimeSinceStartup < catchUntil && !backend.IsComputing && !backend.HasCompletedGeneration)
+                yield return null;
+
+            facts.GenerationsBefore = gridRef.Backend.Generation;
+            facts.StepInFlightAtPause = backend.IsComputing;
+
+            // The command under test: this is what has to be immediate.
+            var watch = Stopwatch.StartNew();
+            SetRunning(controllerRef, false);
+            watch.Stop();
+            facts.PauseCommandMs = watch.Elapsed.TotalMilliseconds;
+            facts.GenerationImmediatelyAfterPause = gridRef.Backend.Generation;
+
+            // Frames after the pause. Always at least PauseObservationSeconds; longer when a
+            // generation was in flight, because that generation has to land in the waiting slot
+            // before the stash can be observed.
+            float pausedAt = Time.realtimeSinceStartup;
+            var frames = new List<double>();
+            while (true)
+            {
+                double paused = Time.realtimeSinceStartup - pausedAt;
+                bool minimumElapsed = paused >= PauseObservationSeconds;
+                bool waitingForStash = facts.StepInFlightAtPause && !backend.HasCompletedGeneration &&
+                                       paused < PauseStashWaitSeconds;
+                if (minimumElapsed && !waitingForStash)
+                    break;
+
+                yield return null;
+                frames.Add(Time.unscaledDeltaTime * 1000.0);
+            }
+
+            facts.ObservationSeconds = Time.realtimeSinceStartup - pausedAt;
+            facts.GenerationAfterPauseObservation = gridRef.Backend.Generation;
+            facts.FramesObservedAfterPause = frames.Count;
+            if (frames.Count > 0)
+                facts.FramesAfterPause = LifeBenchStatistics.Summarise(frames);
+
+            // The generation that was in flight must have finished into the waiting slot: kept for
+            // the resume, not displayed and not thrown away.
+            facts.CompletionWaitingWhilePaused = backend.HasCompletedGeneration;
+            facts.RefusedGenerationsAtEnd = backend.RefusedGenerations;
+
+            // Resume: the display advances by exactly one, and nothing is skipped.
+            int before = gridRef.Backend.Generation;
+            SetRunning(controllerRef, true);
+            float resumeUntil = Time.realtimeSinceStartup + PauseStashWaitSeconds;
+            while (Time.realtimeSinceStartup < resumeUntil && gridRef.Backend.Generation == before)
+                yield return null;
+
+            facts.GenerationAfterResume = gridRef.Backend.Generation;
+            facts.AdvancedByOneOnResume = gridRef.Backend.Generation == before + 1;
+            facts.RefusedGenerationsAtEnd = backend.RefusedGenerations;
+            SetRunning(controllerRef, false);
         }
 
         /// <summary>
@@ -996,7 +1184,7 @@ namespace ConwayGameOfLife
         private void WriteLine(bool frameScenariosOnly, int width, int height, int cells, string backendName,
             string boardIdentifiedAs, Generation fbm, Generation uniform, LifeBenchStatistics.Summary cpuLoad, LifeBenchStatistics.Summary gpuLoad,
             LifeBenchStatistics.Summary cpuRules, LifeBenchStatistics.Summary gpuSubmit, LifeBenchStatistics.Summary gpuBatch, DisplayFacts display,
-            List<ScenarioResult> scenarios, MemoryFacts memory, int configuredVSync,
+            List<ScenarioResult> scenarios, PauseResponseFacts pauseResponse, MemoryFacts memory, int configuredVSync,
             int configuredTargetFrameRate, bool focusedThroughout, double elapsedSeconds)
         {
             var json = new StringBuilder();
@@ -1095,6 +1283,12 @@ namespace ConwayGameOfLife
 
             json.Append("\"frameScenarioCaveat\": \"every scenario ran with vsync off and the frame rate uncapped, so an interval describes work rather than pacing -- and is still not a pure compute cost. Each scenario records TWO rates for the same window: achievedGenerationsPerSecond is this probe's own completed-generation difference over its own wall clock, and controllerReportedGenerationsPerSecond is what the panel published from its 0.5 s tumbling window; neither stands alone. GPU and CPU frame times come from FrameTimingManager, are frame-level (the whole frame, including UI composition), and are reported with the number of VALID samples against the number requested\", ");
 
+            json.Append("\"pauseResponse\": ");
+            json.Append(PauseResponseJson(pauseResponse));
+            json.Append(", ");
+
+            json.Append("\"backgroundEvolutionCaveat\": \"on the CPU backend a generation is computed on a worker thread. backgroundComputeMs is the rule step on THAT thread; backgroundResultCopyMs is the worker reading its finished board out for handover; backgroundHandoverCopyMs is the copy the MAIN THREAD makes when the worker has to rebuild after the board changed; gridReportedUploadMs in the frame scenarios is the main thread's whole-board upload to the display buffer. They happen on different threads at different moments and are never summed. Moving the computation off the frame does NOT make a generation cheaper and does NOT remove the upload: the frame statistics of running-cpu-backend show what the interface paid, and the upload is still paid on the main thread\", ");
+
             if (frameScenariosOnly)
             {
                 json.Append("\"memory\": null, ");
@@ -1138,7 +1332,7 @@ namespace ConwayGameOfLife
             json.Append('}');
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string path = Path.Combine(projectRoot, "stage-c-bench-r4.jsonl");
+            string path = Path.Combine(projectRoot, "stage-c-bench-r5.jsonl");
             File.AppendAllText(path, json + Environment.NewLine);
             Debug.Log($"[stage-c-bench] appended {width}x{height} ({backendName}) to {path}");
             Debug.Log($"[stage-c-bench] {json}");
@@ -1159,7 +1353,9 @@ namespace ConwayGameOfLife
             json.Append("\"achievedGenerationsPerSecondBasis\": \"the benchmark's own count: the board's generation at the end minus its generation at the start, divided by the wall clock between those two readings\", ");
             json.Append($"\"controllerReportedGenerationsPerSecond\": {F(scenario.ControllerAchievedGenerationsPerSecond)}, ");
             json.Append($"\"controllerRateSampleFormed\": {Bool(scenario.ControllerRateSampleFormed)}, ");
-            json.Append($"\"controllerClockOverloaded\": {Bool(scenario.ControllerOverloaded)}, ");
+            json.Append($"\"controllerClockOverloadedAtEnd\": {Bool(scenario.ControllerOverloaded)}, ");
+            json.Append($"\"controllerEverOverloaded\": {Bool(scenario.ControllerEverOverloaded)}, ");
+            json.Append($"\"controllerOverloadFrames\": {scenario.ControllerOverloadFrames}, ");
             json.Append($"\"frames\": {StatsOrNull(scenario.Frames)}, ");
             json.Append($"\"framesPerSecond\": {F(scenario.FramesPerSecond)}, ");
             json.Append($"\"firstDecileFrameMedianMs\": {F(scenario.FirstDecileFrameMedianMs)}, ");
@@ -1168,6 +1364,13 @@ namespace ConwayGameOfLife
             json.Append($"\"cutOffBySafetyCap\": {Bool(scenario.CutOffBySafetyCap)}, ");
             json.Append($"\"framesWhereGridUploadCostWasNonZero\": {scenario.FramesWhereGridUploadCostWasNonZero}, ");
             json.Append($"\"gridReportedUploadMs\": {StatsOrNull(scenario.GridReportedUploadMs)}, ");
+            json.Append($"\"backgroundBackend\": {Bool(scenario.BackgroundBackend)}, ");
+            json.Append($"\"backgroundAdoptionsObserved\": {scenario.BackgroundAdoptionsObserved}, ");
+            json.Append($"\"backgroundComputeMs\": {StatsOrNull(scenario.BackgroundComputeMs)}, ");
+            json.Append($"\"backgroundResultCopyMs\": {StatsOrNull(scenario.BackgroundResultCopyMs)}, ");
+            json.Append($"\"backgroundHandoverCopyMs\": {StatsOrNull(scenario.BackgroundHandoverCopyMs)}, ");
+            json.Append($"\"backgroundRefusedGenerationsAtEnd\": {scenario.BackgroundRefusedGenerationsAtEnd}, ");
+            json.Append($"\"backgroundRefusedSubmissionsAtEnd\": {scenario.BackgroundRefusedSubmissionsAtEnd}, ");
             json.Append($"\"gpuFrameTimeMs\": {StatsOrNull(scenario.GpuFrameMs)}, ");
             json.Append($"\"cpuFrameTimeMs\": {StatsOrNull(scenario.CpuFrameMs)}, ");
             json.Append($"\"frameTimingsCaptureCalls\": {scenario.FrameTimingsCaptureCalls}, ");
@@ -1200,6 +1403,39 @@ namespace ConwayGameOfLife
                 ? "null"
                 : $"{{{generation.Stats.Json()}, \"realisedDensity\": {F(generation.RealisedDensity)}, " +
                   $"\"alive\": {generation.Alive}, \"parameters\": \"{generation.Parameters}\"}}";
+
+        /// <summary>
+        /// The pause, as the record has to state it: what the command cost, whether a generation
+        /// was in flight when it arrived, whether the display froze, whether the finished
+        /// generation was kept, and whether the resume advanced by exactly one.
+        /// </summary>
+        private static string PauseResponseJson(PauseResponseFacts facts)
+        {
+            if (facts == null || !facts.Measured)
+                return "null";
+
+            var json = new StringBuilder();
+            json.Append('{');
+            json.Append($"\"backend\": \"{facts.Backend}\", ");
+            json.Append($"\"board\": \"{facts.Board}\", ");
+            json.Append($"\"stepInFlightAtPause\": {Bool(facts.StepInFlightAtPause)}, ");
+            json.Append($"\"pauseCommandMs\": {F(facts.PauseCommandMs)}, ");
+            json.Append($"\"generationsBefore\": {facts.GenerationsBefore}, ");
+            json.Append($"\"generationImmediatelyAfterPause\": {facts.GenerationImmediatelyAfterPause}, ");
+            json.Append($"\"generationAfterPauseObservation\": {facts.GenerationAfterPauseObservation}, ");
+            json.Append($"\"advancedWhilePaused\": {facts.GenerationAfterPauseObservation - facts.GenerationImmediatelyAfterPause}, ");
+            json.Append($"\"displayFrozenWhilePaused\": {Bool(facts.DisplayFrozen)}, ");
+            json.Append($"\"observationSeconds\": {F(facts.ObservationSeconds)}, ");
+            json.Append($"\"framesObservedAfterPause\": {facts.FramesObservedAfterPause}, ");
+            json.Append($"\"framesAfterPause\": {StatsOrNull(facts.FramesAfterPause)}, ");
+            json.Append($"\"completionWaitingWhilePaused\": {Bool(facts.CompletionWaitingWhilePaused)}, ");
+            json.Append($"\"advancedByOneOnResume\": {Bool(facts.AdvancedByOneOnResume)}, ");
+            json.Append($"\"generationAfterResume\": {facts.GenerationAfterResume}, ");
+            json.Append($"\"refusedGenerationsAtEnd\": {facts.RefusedGenerationsAtEnd}, ");
+            json.Append("\"caveat\": \"pauseCommandMs is the controller's own pause command on the main thread, not a frame time. A generation that was in flight when the pause arrived keeps running on the worker: it must land in the waiting slot (completionWaitingWhilePaused) without moving the display (displayFrozenWhilePaused) and be taken over on resume (advancedByOneOnResume). A fast board can finish between frames, in which case stepInFlightAtPause is false and the record says so rather than implying a generation was interrupted\"");
+            json.Append('}');
+            return json.ToString();
+        }
 
         private static string StatsOrNull(LifeBenchStatistics.Summary stats) =>
             LifeBenchStatistics.SummaryOrNull(stats);

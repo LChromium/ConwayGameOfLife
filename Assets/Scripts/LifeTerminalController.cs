@@ -46,7 +46,11 @@ namespace ConwayGameOfLife
 
         // Stage A: the terminal owns backend selection, run state and commands.
         // Evolution lives in the backend, presentation lives in LifeGridElement.
-        private CpuLifeBackend cpuBackend;
+        //
+        // Stage D: the CPU path computes on a worker (LifeAsyncCpuBackend) so that a 650 ms
+        // generation at 4096x4096 no longer happens inside a frame. The GPU backend stays
+        // synchronous -- it is fast, and its board never round-trips through the main thread.
+        private LifeAsyncCpuBackend cpuBackend;
         private GpuLifeBackend gpuBackend;
         private ILifeBackend backend;
         private LifeBoardRenderer renderer;
@@ -94,6 +98,16 @@ namespace ConwayGameOfLife
         private float achievedGenerationsPerSecond;
         private bool achievedRateMeasured;
         private bool clockOverloaded;
+
+        /// <summary>
+        /// A "▸ 单步" has been asked for and its generation has not been taken over yet. A flag,
+        /// not a queue: pressing the button again while one generation is in flight cannot
+        /// accumulate a second one.
+        /// </summary>
+        private bool singleStepOutstanding;
+
+        /// <summary>The worker failure already shown, so it is reported once and not every frame.</summary>
+        private string asyncFailureLogged;
 
         /// <summary>
         /// Generations retired during the previous frame. Held back until this frame's delta
@@ -185,7 +199,7 @@ namespace ConwayGameOfLife
                 Debug.LogWarning($"[Life] compute display unavailable ({rendererError}); falling back to per-cell drawing");
             }
 
-            cpuBackend = new CpuLifeBackend(gridWidth, gridHeight);
+            cpuBackend = new LifeAsyncCpuBackend(gridWidth, gridHeight);
             gpuAvailable = GpuLifeBackend.TryCreate(gridWidth, gridHeight, out gpuBackend, out gpuUnavailableReason);
             if (!gpuAvailable)
                 Debug.LogWarning($"[Life] GPU backend unavailable: {gpuUnavailableReason}");
@@ -603,6 +617,11 @@ namespace ConwayGameOfLife
         {
             PumpSeeding();
 
+            // A generation computed off the frame is taken over BEFORE the clock asks for the
+            // next one, so the board moves in order and a paused clock keeps its display frozen
+            // while the finished generation waits in the backend.
+            int retired = PumpEvolution();
+
             if (!running || backend == null)
                 return;
 
@@ -624,23 +643,33 @@ namespace ConwayGameOfLife
             // When either cap bites, the WHOLE generations of debt are discarded and the
             // simulation is allowed to run slower than the slider asks. Steps are never
             // skipped: every generation that happens is a real evolution of the real board,
-            // there are just fewer of them. What this does NOT do is make a single 650 ms
-            // synchronous step cheap -- a frame that contains one still takes 650 ms. That
-            // separation is the point: first stop the amplification, then decide whether
-            // CPU evolution needs to move off the main thread.
-            bool advanced = false;
-            int stepped = 0;
+            // there are just fewer of them.
+            //
+            // Stage D adds a third bound for the background CPU path: a generation that is still
+            // computing, or one whose result has not been taken over yet, stops the loop. The
+            // pipeline holds one generation at a time, so the clock waits instead of queueing
+            // work behind itself -- and the debt that builds while it waits is discarded by the
+            // overload branch below, exactly as it is for a synchronous backend that cannot keep
+            // up. What a background backend does NOT do is make a single generation cheaper: the
+            // whole-board upload after each adopted generation is still paid on the main thread.
+            int submitted = 0;
+            var asyncBackend = backend as ILifeAsyncBackend;
 
             // Timestamps, not a Stopwatch object: this runs on every running frame, and a
             // Stopwatch.StartNew() per frame allocates even on the frames that advance nothing.
             long stepStartedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
-            while (accumulator >= interval && stepped < MaxGenerationsPerFrame)
+            while (accumulator >= interval && submitted < MaxGenerationsPerFrame)
             {
+                if (asyncBackend != null && (asyncBackend.IsComputing || asyncBackend.HasCompletedGeneration))
+                    break;
+
                 accumulator -= interval;
                 backend.Step();
-                advanced = true;
-                stepped++;
+                submitted++;
+
+                if (asyncBackend == null)
+                    retired++;
 
                 double steppingMilliseconds =
                     (System.Diagnostics.Stopwatch.GetTimestamp() - stepStartedTicks) * 1000.0 /
@@ -659,7 +688,7 @@ namespace ConwayGameOfLife
                 overloaded = true;
             }
 
-            TrackAchievedRate(stepped);
+            TrackAchievedRate(retired);
 
             if (overloaded != clockOverloaded)
             {
@@ -671,12 +700,77 @@ namespace ConwayGameOfLife
 
             // One repaint per frame, not one per generation: a fast clock can
             // advance several generations in a single frame and only the final
-            // state is ever visible.
-            if (advanced)
+            // state is ever visible. On a background backend the repaint belongs to the
+            // adoption instead, which PumpEvolution has already handled.
+            if (asyncBackend == null && submitted > 0)
             {
                 RefreshReadouts();
                 grid.MarkBoardDirty();
             }
+        }
+
+        /// <summary>
+        /// Drives a backend that computes off the frame: takes a finished generation into the
+        /// display, and issues the single generation a manual "▸ 单步" is still owed.
+        ///
+        /// <para><b>Pause semantics, which is what this method decides.</b> A paused clock stops
+        /// adopting, so the display freezes at the generation it was showing. Whatever the worker
+        /// finishes lands in the backend's waiting slot and stays there: nothing is thrown away
+        /// and nothing is fast-forwarded. Resuming -- or asking for a single step -- takes it over
+        /// first, so a generation that was already computed is never skipped. A result that is
+        /// refused is refused because a command replaced the board it belonged to, and the backend
+        /// counts it rather than dropping it silently.</para>
+        ///
+        /// <para>Returns how many generations moved the board this frame: 0 or 1, because the
+        /// backend holds at most one generation at a time.</para>
+        /// </summary>
+        private int PumpEvolution()
+        {
+            if (backend is not ILifeAsyncBackend asyncBackend)
+                return 0;
+
+            int retired = 0;
+
+            if ((running || singleStepOutstanding) && asyncBackend.HasCompletedGeneration &&
+                asyncBackend.TryAdoptCompletedGeneration(out _))
+            {
+                retired = 1;
+                singleStepOutstanding = false;
+                RefreshReadouts();
+                grid.MarkBoardDirty();
+
+                // A single step while paused is not a run, so it does not enter the rate window
+                // and only the state readout needs to change.
+                if (!running)
+                    RefreshState();
+            }
+
+            ReportAsyncFailure(asyncBackend);
+
+            // The manual generation, issued only while the pipeline is free. Kept as a flag so a
+            // second press while one is in flight cannot queue a third generation.
+            if (!running && singleStepOutstanding &&
+                !asyncBackend.IsComputing && !asyncBackend.HasCompletedGeneration)
+            {
+                backend.Step();
+            }
+
+            return retired;
+        }
+
+        /// <summary>
+        /// Reports a worker failure once. Without it a backend that throws would leave the clock
+        /// asking for generations that never arrive, with nothing on screen saying why.
+        /// </summary>
+        private void ReportAsyncFailure(ILifeAsyncBackend asyncBackend)
+        {
+            string failure = asyncBackend.FailureMessage;
+            if (failure == null || failure == asyncFailureLogged)
+                return;
+
+            asyncFailureLogged = failure;
+            Debug.LogWarning($"[Life] CPU evolution failed: {failure}");
+            RefreshState();
         }
 
         /// <summary>
@@ -742,6 +836,12 @@ namespace ConwayGameOfLife
             achievedGenerationsPerSecond = 0f;
             achievedRateMeasured = false;
             clockOverloaded = false;
+
+            // The single-step intent is part of the state that ends here. Every caller is either
+            // a command that replaces the board (reset, edit, pattern, backend switch), where the
+            // step the user asked for no longer describes anything, or the step itself, which
+            // sets the flag again immediately after.
+            singleStepOutstanding = false;
         }
 
         /// <summary>
@@ -1255,6 +1355,10 @@ namespace ConwayGameOfLife
             seedingApplyButton.SetEnabled(canApply);
             seedingCancelButton.SetEnabled(previewing);
 
+            // The run/pause and single-step controls are deliberately NOT gated on a background
+            // computation. Pausing during one is the point of stage D, and 单步 while one is in
+            // flight is a meaningful request: PumpEvolution hands over the generation that is
+            // already being computed (or already waiting) rather than starting a second one.
             playButtonRef?.SetEnabled(!previewing);
             stepButtonRef?.SetEnabled(!previewing);
 
@@ -1445,6 +1549,18 @@ namespace ConwayGameOfLife
                 return;
 
             Stop();
+
+            if (backend is ILifeAsyncBackend)
+            {
+                // One generation, computed off the frame. The intent is a flag, and
+                // PumpEvolution both takes over a generation that is already finished (including
+                // one computed before a pause) and issues this one -- in that order, so a single
+                // step can never skip a generation that was already computed.
+                singleStepOutstanding = true;
+                RefreshState();
+                return;
+            }
+
             backend.Step();
             grid.MarkBoardDirty();
             RefreshReadouts();
@@ -1490,9 +1606,18 @@ namespace ConwayGameOfLife
             // The achieved figure only exists once a window has closed. The initialised zero is
             // NOT a measurement, so the run says it is still sampling instead -- otherwise every
             // start and every resume would flash "实际 0/秒".
-            if (!running)
+            if (asyncFailureLogged != null)
             {
-                stateLabel.text = "已暂停";
+                // A worker that threw is the one thing the readout must not paper over: the clock
+                // is still asking for generations and none of them will arrive.
+                stateLabel.text = "演算失败";
+            }
+            else if (!running)
+            {
+                // A single step is a computation like any other, and it is off the frame now:
+                // saying so is the difference between "nothing is happening" and "this will land
+                // in a moment".
+                stateLabel.text = singleStepOutstanding ? "单步计算中…" : "已暂停";
             }
             else if (clockOverloaded)
             {
@@ -1514,7 +1639,9 @@ namespace ConwayGameOfLife
                 stateLabel.text = "演算中";
             }
 
-            stateLabel.tooltip = running ? StateTooltip() : string.Empty;
+            stateLabel.tooltip = asyncFailureLogged != null
+                ? asyncFailureLogged
+                : running ? StateTooltip() : string.Empty;
 
             if (!gpuAvailable)
             {

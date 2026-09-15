@@ -98,6 +98,9 @@ namespace ConwayGameOfLife.Tests
             yield return Settle();
 
             VisualElement root = GetRoot();
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+            Assert.IsNotNull(controller, "the runtime bootstrap did not create a LifeTerminalController");
+
             Label generation = ReadoutValue(root, "GENERATION");
             Assert.IsNotNull(generation, "could not find the GENERATION readout");
 
@@ -111,10 +114,10 @@ namespace ConwayGameOfLife.Tests
             Button step = FindButton(root, "▸ 单步");
             Assert.IsNotNull(step, "could not find the single-step button");
 
-            Press(step);
+            yield return StepOnce(root, controller);
             Assert.AreEqual("0001", generation.text, "single-step did not advance the generation counter");
 
-            Press(step);
+            yield return StepOnce(root, controller);
             Assert.AreEqual("0002", generation.text, "single-step did not advance the generation counter again");
         }
 
@@ -341,8 +344,8 @@ namespace ConwayGameOfLife.Tests
                 "the random board came out empty, which would make this test vacuous");
 
             for (int i = 0; i < 3; i++)
-                Press(FindButton(root, "▸ 单步"));
-            yield return null;
+                yield return StepOnce(root, controller);
+
             Assert.AreEqual("0003", ReadoutValue(root, "GENERATION").text,
                 "three steps should advance three generations");
 
@@ -359,8 +362,8 @@ namespace ConwayGameOfLife.Tests
             // Run forward again and reset a second time: a reseeding reset would
             // produce a different board here.
             for (int i = 0; i < 2; i++)
-                Press(FindButton(root, "▸ 单步"));
-            yield return null;
+                yield return StepOnce(root, controller);
+
             Press(FindButton(root, "↺ 重置"));
             yield return null;
 
@@ -396,8 +399,8 @@ namespace ConwayGameOfLife.Tests
             uint[] startingBoard = ReadCells(gpuBackend);
 
             for (int i = 0; i < 3; i++)
-                Press(FindButton(root, "▸ 单步"));
-            yield return null;
+                yield return StepOnce(root, controller);
+
             Assert.AreEqual(3, gpuBackend.Generation, "the GPU backend should have advanced three generations");
 
             SelectBackend(root, gpu: false);
@@ -657,26 +660,26 @@ namespace ConwayGameOfLife.Tests
             Assert.Greater(frames, 10, "not enough frames elapsed to judge the clock");
             Assert.Greater(advanced, 0, "the clock advanced no generations across real frames");
 
-            // Time the rule step itself while the board is genuinely live. Pinned to
-            // the CPU backend so the figure stays a CPU rule-engine number, which is
-            // what stage 1 published. GPU rule cost is measured by the stage-A
-            // comparison harness, not here.
-            SelectBackend(GetRoot(), gpu: false);
-            yield return null;
-
+            // Time the rule step itself while the board is genuinely live. The engine is created
+            // here rather than borrowed from the terminal: since stage D the terminal's CPU path
+            // computes off the frame, so stepping IT would time submissions. LifeSimulation is
+            // still the single source of truth for the rules, and this is the same
+            // CpuLifeBackend wrapper the comparison harness uses.
             ILifeBackend live = ReadBackend(controller);
+            using var engine = new CpuLifeBackend(live.Width, live.Height);
+            engine.WrapEdges = live.WrapEdges;
             const int timedSteps = 2000;
             var stepWatch = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < timedSteps; i++)
             {
-                live.Step();
+                engine.Step();
             }
 
             stepWatch.Stop();
             double msPerStep = stepWatch.Elapsed.TotalMilliseconds / timedSteps;
             Debug.Log($"[clock-running] CPU engine step cost while evolving: {msPerStep:F4} ms/generation " +
-                      $"({timedSteps} steps, board {live.Width}x{live.Height} = {live.Width * live.Height} cells, " +
-                      $"Unity Editor runtime)");
+                      $"({timedSteps} steps, board {engine.Width}x{engine.Height} = {engine.Width * engine.Height} cells, " +
+                      $"reference backend called directly, Unity Editor runtime)");
 
             // The accumulator drives generations from unscaledDeltaTime, so the achieved rate must
             // land near the requested rate (not below half, and never above double).
@@ -698,7 +701,21 @@ namespace ConwayGameOfLife.Tests
             // It is reported as a labelled micro-benchmark only, and is deliberately NOT used to
             // characterise real-time performance. Cross-frame clock behaviour is covered by
             // Clock_RunsAtTheRequestedRateAcrossRealFrames; grid repaint needs the Unity Profiler.
+            //
+            // Pinned to the GPU backend, which still retires generations inside the call. On the
+            // background CPU path (stage D) a synchronous Update only SUBMITS a generation, so
+            // 2000 of them would measure submissions and then divide by adoptions that happened to
+            // land -- a number with no meaning. The CPU engine's own step cost is measured against
+            // the reference backend in Clock_RunsAtTheRequestedRateAcrossRealFrames instead.
             yield return Settle();
+
+            DropdownField backendField = GetRoot().Q<DropdownField>("backend-field");
+            Assert.IsNotNull(backendField, "missing the backend selector");
+            if (!backendField.enabledSelf)
+                Assert.Ignore("compute shaders unavailable on this machine; the micro-benchmark was not run");
+
+            SelectBackend(GetRoot(), gpu: true);
+            yield return null;
 
             LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
             Assert.IsNotNull(controller);
@@ -1008,6 +1025,28 @@ namespace ConwayGameOfLife.Tests
                 "backend", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.IsNotNull(field, "LifeTerminalController.backend field not found");
             return (ILifeBackend)field.GetValue(controller);
+        }
+
+        /// <summary>
+        /// Presses "▸ 单步" and waits for the generation to land.
+        ///
+        /// <para>Since stage D the CPU path computes off the frame, so "the button was pressed" and
+        /// "the counter moved" are different moments: the press submits a generation and the
+        /// controller takes it over when the worker finishes. The GPU path still advances inside the
+        /// press, in which case this returns without yielding.</para>
+        /// </summary>
+        private static IEnumerator StepOnce(VisualElement root, LifeTerminalController controller)
+        {
+            ILifeBackend backend = ReadBackend(controller);
+            int before = backend.Generation;
+
+            Press(FindButton(root, "▸ 单步"));
+
+            for (int frame = 0; frame < 300 && backend.Generation == before; frame++)
+                yield return null;
+
+            Assert.AreEqual(before + 1, backend.Generation,
+                "单步 did not advance the generation counter");
         }
 
         /// <summary>Reads the backend a LifeGridElement is bound to, via its private field.</summary>
