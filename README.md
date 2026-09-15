@@ -2,7 +2,7 @@
 
 用 Unity 6000.6.0f1 实现康威生命游戏（Conway's Game of Life）的核心逻辑，附带一套可复现的自动化验证。
 
-![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-73%20EditMode%20%2B%2039%20PlayMode-brightgreen)
+![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-75%20EditMode%20%2B%2039%20PlayMode-brightgreen)
 
 ---
 
@@ -74,7 +74,7 @@ unity test . --mode PlayMode --output test-results-playmode.xml
 
 或在 Unity 中打开 **Window → General → Test Runner** 分别运行 EditMode / PlayMode。
 
-**当前结果：EditMode 73/73 通过，PlayMode 39/39 通过。**
+**当前结果：EditMode 75/75 通过，PlayMode 39/39 通过。**
 
 ### 测试覆盖了什么
 
@@ -194,7 +194,7 @@ Assets/
 │   ├── LifePerfProbe.cs           # Player 内 `-lifePerf` 测量探针
 │   └── RuntimeLayoutProbe.cs      # Player 内 `-lifeLayoutProbe` 布局校验探针
 ├── Tests/
-│   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机（73 项）
+│   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机（75 项）
 │   │   ├── ConwayGameOfLife.Tests.EditMode.asmdef
 │   │   ├── LifeSimulationTests.cs
 │   │   ├── LifePatternTests.cs
@@ -247,6 +247,10 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 
 > **阶段归档 ≠ 发布版性能验收。** 记录的是开发版构建；且「规则推进 / 网格重绘 / UI 布局」
 > 的分项成本**仍未测量**，因此**不指定优化方向**。
+
+> **阶段 B（fBM + 域扭曲概率播种）已归档**，标签 `stage-b-life-seeding`；
+> 清单、证据与保留问题见 [`Assets/Docs/StageB-Seeding.md`](Assets/Docs/StageB-Seeding.md) §11。
+> 主体验收通过，范围已关闭，不再扩展。
 
 ---
 

@@ -78,6 +78,13 @@
 旧任务结束后立即以最新参数启动——一次长拖拽因此合并成「最多多算一次」，
 而不是每个事件算一次，也不是一次都不算。
 
+**失败与成功遵守同一条规则。** 一个已经被取代的任务抛异常时，它的失败和它的结果一样被丢弃：
+既不写 `FailureMessage`（当前请求并没有失败），**也不清掉取代它的那个请求**。
+这里曾经有一个真实缺陷——异常分支无条件复位 `wantCandidate`/`requestPending`，
+于是「旧任务崩溃」把用户刚发出的新请求一起取消，界面停在预览打开、没有候选、也没有任何计算的状态。
+现在异常分支比对失败任务的参数快照：只有当它**就是**当前请求时才停止等待并上报失败，
+否则只释放 worker，让挂起的新请求立刻启动。
+
 跨会话生命周期：`OnDestroy` 调用 `Seeding.Dispose()`，**不在主线程等待任务结束**——
 退出路径阻塞等一个没人要的结果会把干净退出变成卡顿。任务自己跑完，结果被 `disposed` 拒绝。
 
@@ -90,18 +97,19 @@
 | 应用 | 候选成为实验初态，世代清零，保持暂停；活细胞回薄荷绿；清除样本选中高亮。若预览尚未与控件一致，意图被记住，**只在一个被采纳的候选上花掉**，被丢弃的结果消耗不了它 |
 | 取消 | 丢掉候选，恢复进入预览前的标题与样本高亮，**界面当场恢复可用** |
 | 重置 | 恢复上一次确认的初态（阶段 A 的语义，未被本阶段改变） |
-| 换种子 | 独立按钮，且是显式操作 |
+| 换种子 | 种子输入框右侧的按钮：由当前种子派生下一个种子（不是重新随机整块盘面，盘面要再点「预览」） |
 | 运行 / 单步 / 绘制细胞 | **预览中禁用**，命令入口自身也检查状态 |
 | 平移 / 缩放 | **预览中仍可用**——只改视图 |
 | 选样 / 清空 / 重置 / 随机播种 / 切换后端 | **先统一结束预览**，再执行原命令 |
-| 生成抛异常 | 会话停止等待（`wantCandidate` 复位）并记录 `FailureMessage`，界面显示「生成失败」。**不留下一个永远转圈的「生成中」** |
+| 当前请求的生成抛异常 | 会话停止等待（`wantCandidate` 复位）并记录 `FailureMessage`，界面显示「生成失败」。**不留下一个永远转圈的「生成中」** |
+| **已被取代的任务抛异常** | 与它的结果同样丢弃。**不清除取代它的请求**，不写失败信息，worker 一空出就启动挂起的请求 |
 
 `Apply` 返回的是**副本**而不是会话内部缓冲：调用方把它存成实验初态，而会话下一次
 生成会覆盖自己的缓冲——不复制的话「重置」恢复的板子会被悄悄改写。
 
 ## 5. 证据
 
-### 测试（EditMode 73/73，PlayMode 39/39）
+### 测试（EditMode 75/75，PlayMode 39/39）
 
 异步时序靠**注入的可控生成器**验证：`LifeSeedingSession` 的构造函数接受一个
 `LifeBoardGenerator`，测试用按种子开关的闸门把「旧任务还没跑完」变成可观察状态，
@@ -119,6 +127,9 @@
 | 销毁后迟到结果不被采纳 | 会话：`Dispose_WhileAGenerationRuns_RefusesTheLateResult`（任务在跑时销毁）<br>接线：`DestroyingTheController_DisposesTheSeedingSession`（真的销毁一个控制器实例，查会话被释放） |
 | 自动应用意图不被旧结果消耗 | `ApplyingAnOutOfDatePreview_AppliesTheNewestParameters`（同一帧内改参数，等到的初态必须来自最新参数） |
 | 生成失败不锁死界面 | `GeneratorFailure_ReleasesTheInterfaceInsteadOfWaitingForever` |
+| **过期任务失败不得清除新请求** | `ASupersededTaskFailing_MustNotClearTheReplacementRequest`（A 仍在跑 → 改 B 并请求 → 放行 A 使其抛异常 → B 的请求必须还在、必须启动、必须落地；断言 B 落地前不报失败） |
+| —— 且该测试能被证伪 | 把异常分支改回无条件复位后重跑同一条测试：`1 failed`，失败信息停在 `timed out after 30s waiting for the replacement generation to start`——即「新请求被旧任务的失败取消了」这一现象本身。改回修复版即恢复通过（命令见 §11）。`tr-*.xml` 是本地临时输出，按 `.gitignore` 不入库，因此这里记录的是**命令与观测**，不是文件 |
+| 当前请求失败仍然上报并释放 | `TheCurrentTaskFailing_StillReportsAndReleases`（防止上一条被修成「什么都不清」，那会把面板焊死） |
 
 播种本身：
 
@@ -173,6 +184,12 @@
 原因不同，修法也不同：前者是主题给 popup 文本固定了一个 10.7 的行盒（给 `min-height` 即可），
 后者是主题给可编辑文本的上下内边距吃掉了行高（滑块自己的数值框一直正常，因为它把内边距清零了）。
 两类都记在 `LifeTerminal.uss` 里，附上量到的数字。
+
+**图标也是同一类问题。** 种子按钮原来写的是 `⟳`（U+27F3），运行时字体**没有这个字形**，
+Player 里画成一个空心方框。字体覆盖范围无法从源码判断，只能在实机截图里看，所以换成了
+一个这类构建**已经证明能画**的字符类：`换`（界面上每一处中文标签都正常），完整措辞放进 tooltip。
+顺手把其余图标也在实机上放大核对过一遍：`▶ 运行` / `▸ 单步` / `↺ 重置` / `Ⅱ 暂停` / `●`
+都正常，只有 `⟳` 缺字形。
 
 ## 6. 工具区结构
 
@@ -257,3 +274,24 @@ $seed = '-lifeBoard 256x256 -lifeZoom 1 -lifeSeedPreview -lifeSeed 20260915 ' +
 .\Tools\capture-player-window.ps1 -Width 600 -Height 1000 -Arguments $seed `
     -Output Screenshots\player-seed-ui-600x1000.png
 ```
+
+---
+
+## 11. 归档（阶段 B）
+
+| 项 | 内容 |
+|---|---|
+| **版本位置** | Git 标签 `stage-b-life-seeding`（提交号用 `git describe --tags` 取，不写死在文档里）|
+| **范围** | fBM + 域扭曲概率播种：生成器、预览/应用/取消/重置语义、后台生成与界面约束、工具区页签 |
+| **测试报告** | EditMode **75/75**、PlayMode **39/39**（`test-results-*.xml` 随版本保存）|
+| **证伪记录** | 见 §4.2 与 §5：把异常分支改回无条件复位，`unity test . --mode EditMode --filter ASupersededTaskFailing_MustNotClearTheReplacementRequest` 从通过变为 1 failed，停在 `timed out after 30s waiting for the replacement generation to start`；`git stash` 回来即恢复通过。阶段一的 `tr-falsify.xml`、阶段 A 的 `gpu-cpu-equivalence.json` 同理可复现 |
+| **画面验收** | `Screenshots/player-seed-ui-1600x900.png`、`-600x1000.png`（工具区两页签、播种面板、逐项文字核对）|
+| **原始测量** | `Screenshots/player-seed-*.png` 四张盘面、`stage-a-perf.jsonl`（阶段 A 帧成本）|
+| **保留问题** | 1024² 首帧仍约 0.5 s；噪声只在 CPU 生成；堆叠布局底部有空白；未做过渡动画 |
+
+**未纳入本阶段**（明确留给阶段 C）：大棋盘基准、亚像素密度总览、GPU 独立生成噪声。
+本阶段范围到此关闭，不再扩展。
+
+> **阶段归档 ≠ 发布版性能验收。** 截图与测量都来自**开发版**构建；
+> 性能口径见 [`StageA-Gpu.md`](StageA-Gpu.md) §5：GPU 提交耗时只算命令提交，
+> 提交+同步包含整盘回读，是上界，**不据此声称任何 CPU/GPU 加速比**。

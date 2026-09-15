@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using NUnit.Framework;
@@ -81,12 +82,20 @@ namespace ConwayGameOfLife.Tests
         /// <summary>
         /// A generator that blocks each seed until the test releases it, so "a task is
         /// still running" and "that old task finally finished" become observable states
-        /// rather than a race against the machine's speed.
+        /// rather than a race against the machine's speed. Seeds listed at construction
+        /// throw instead of producing a board.
         /// </summary>
         private sealed class GatedGenerator
         {
             private readonly ConcurrentDictionary<int, ManualResetEventSlim> gates = new();
             private readonly ConcurrentDictionary<int, int> runs = new();
+            private readonly HashSet<int> failingSeeds;
+            private int failures;
+
+            public GatedGenerator(params int[] failingSeeds) =>
+                this.failingSeeds = new HashSet<int>(failingSeeds);
+
+            public int Failures => Volatile.Read(ref failures);
 
             public void Run(LifeNoiseParameters parameters, int width, int height, byte[] destination)
             {
@@ -94,6 +103,12 @@ namespace ConwayGameOfLife.Tests
 
                 gates.GetOrAdd(parameters.Seed, _ => new ManualResetEventSlim(false))
                     .Wait(TimeSpan.FromSeconds(PumpTimeoutSeconds));
+
+                if (failingSeeds.Contains(parameters.Seed))
+                {
+                    Interlocked.Increment(ref failures);
+                    throw new InvalidOperationException($"deliberate failure for seed {parameters.Seed}");
+                }
 
                 LifeNoiseSeeding.Generate(parameters, width, height, destination);
             }
@@ -397,6 +412,71 @@ namespace ConwayGameOfLife.Tests
             session.RequestCandidate();
             PumpUntil(session, () => session.HasCandidate, "a candidate from the retry");
             Assert.IsNull(session.FailureMessage, "a successful retry must clear the old failure");
+        }
+
+        [Test]
+        public void ASupersededTaskFailing_MustNotClearTheReplacementRequest()
+        {
+            // The failure path has to obey the same rule as the success path: a task whose
+            // parameters have been replaced is already irrelevant. Clearing the request on
+            // its way out cancelled the replacement the user had asked for -- the panel
+            // then sat with a preview open, no candidate and nothing being computed.
+            var generator = new GatedGenerator(1);
+            LifeSeedingSession session = new(Width, Height, generator.Run);
+
+            session.SetParameters(Fbm(seed: 1));
+            session.RequestCandidate();
+            WaitFor(() => generator.Started(1), "the first generation to start");
+
+            // The user moves on while the first task is still running, and the debounce
+            // elapses: the replacement is requested but has to wait for the worker.
+            session.SetParameters(Fbm(seed: 2));
+            Thread.Sleep(250);
+            session.RequestCandidate();
+            Assert.IsTrue(session.HasPendingRequest, "the replacement request must be remembered");
+            Assert.IsFalse(generator.Started(2), "the worker is still busy with the superseded task");
+
+            generator.Release(1);
+
+            // The superseded task now throws. Its request no longer exists, so its failure
+            // must be dropped the way its result would have been.
+            PumpUntil(session, () => generator.Started(2), "the replacement generation to start");
+
+            Assert.AreEqual(1, generator.Failures, "the first generation was supposed to fail");
+            Assert.IsTrue(session.HasPendingRequest, "the replacement request must survive the old failure");
+            Assert.IsNull(session.FailureMessage,
+                "the current request has not failed, so the panel must not report a failure");
+
+            generator.Release(2);
+            PumpUntil(session, () => session.HasCandidate, "the replacement candidate");
+
+            Assert.AreEqual(2, session.CandidateParameters.Seed,
+                "the replacement must be the one that lands");
+            Assert.IsFalse(session.IsGenerating);
+            Assert.IsFalse(session.CandidateIsStale);
+        }
+
+        [Test]
+        public void TheCurrentTaskFailing_StillReportsAndReleases()
+        {
+            // The other side of the same branch: when the task that fails IS the current
+            // request, the session has to stop waiting and say so. Otherwise the fix above
+            // could have been "never clear anything", which wedges the panel instead.
+            var generator = new GatedGenerator(5);
+            LifeSeedingSession session = new(Width, Height, generator.Run);
+
+            session.SetParameters(Fbm(seed: 5));
+            session.RequestCandidate();
+            WaitFor(() => generator.Started(5), "the generation to start");
+            generator.Release(5);
+
+            PumpUntil(session, () => session.FailureMessage != null, "the failure to be reported");
+
+            Assert.IsTrue(session.FailureMessage.Contains("seed 5"),
+                $"the reported failure should name what failed, got '{session.FailureMessage}'");
+            Assert.IsFalse(session.IsGenerating, "the interface must be released after a real failure");
+            Assert.IsFalse(session.HasPendingRequest);
+            Assert.IsFalse(session.IsWorking);
         }
 
         // -- reporting ----------------------------------------------------------

@@ -925,7 +925,16 @@ namespace ConwayGameOfLife
             seedField.AddToClassList("seed-field");
             seedField.RegisterValueChangedCallback(_ => OnSeedingEdited());
             seedRow.Add(seedField);
-            seedRow.Add(Button("⟳", RerollSeed, "seed-button"));
+
+            // "换" rather than the ⟳ it used to carry: the runtime font has no U+27F3, and
+            // the Player drew the button as an empty box. Which glyphs are present is not
+            // something that can be settled from the source - it was checked in a capture -
+            // so the replacement is a character class this build demonstrably renders
+            // (every CJK label on screen does). The tooltip carries the full wording.
+            Button reroll = Button("换", RerollSeed, "seed-button");
+            reroll.name = "seed-reroll";
+            reroll.tooltip = "换一个种子（由当前种子派生，不是重新随机整块盘面）";
+            seedRow.Add(reroll);
             library.Add(seedRow);
 
             densitySlider = AddSeedingSlider(library, "密度", 0.05f, 0.60f,

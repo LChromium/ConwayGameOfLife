@@ -36,7 +36,9 @@ namespace ConwayGameOfLife
     /// <i>immediately</i>: a task that was already running when a slider moved can finish,
     /// but what it produces is dropped instead of being uploaded a moment later. Debouncing
     /// only decides when the replacement computation is asked for; it does not decide
-    /// whether the old one still counts.</para>
+    /// whether the old one still counts. <b>Failure follows the same rule as success:</b>
+    /// a task that throws for parameters nobody is editing any more is dropped, and in
+    /// particular it must not clear the request that replaced it.</para>
     ///
     /// <para><b>Two different questions, two different answers.</b>
     /// <see cref="IsGenerating"/> means "the panel is waiting for a candidate that matches
@@ -344,14 +346,31 @@ namespace ConwayGameOfLife
                     lock (gate)
                     {
                         working = false;
-                        requestPending = false;
 
-                        // Stop waiting for something that will never arrive: leaving
-                        // wantCandidate set would keep the clock disabled for good.
-                        wantCandidate = false;
-                        failure = exception.Message;
+                        if (disposed)
+                        {
+                            // The session is gone; there is nobody left to report to.
+                        }
+                        else if (parameters.Equals(snapshot))
+                        {
+                            // The failed task WAS the current request, so nothing is on
+                            // the way. Stop waiting -- leaving wantCandidate set would
+                            // keep the clock disabled for good -- and report it.
+                            requestPending = false;
+                            wantCandidate = false;
+                            failure = exception.Message;
+                        }
+
+                        // A failure from a task whose parameters have already been
+                        // replaced is dropped exactly like its result would have been.
+                        // Clearing the request here was a real defect: the replacement
+                        // the user asked for was silently cancelled by the death of the
+                        // thing that had already been superseded.
                     }
 
+                    // The worker is free again, so a request that arrived while it was
+                    // busy starts now instead of waiting for the next frame.
+                    StartNextIfIdle();
                     return;
                 }
 
