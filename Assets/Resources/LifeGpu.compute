@@ -1,0 +1,183 @@
+// GPU rule advancement and board display for Conway's Game of Life.
+//
+// Stage A scope: evolution + display only. No noise seeding.
+//
+// Constraints this file is written against (stage-A brief):
+//   * two uint state buffers, elements are exactly 0 or 1
+//   * index is y * width + x, everywhere, in both kernels
+//   * one thread per cell; read the old buffer, write the new buffer, then swap.
+//     A cell is never written in place within a generation.
+//   * the eight neighbour offsets are counted INDEPENDENTLY. On small boards
+//     (1x1, 1xN) several offsets land on the same cell under wrapping, and the
+//     CPU reference counts each offset separately. De-duplicating here would
+//     silently change the semantics, so it is deliberately not done.
+//     Falsifying this exact line makes the CPU/GPU comparison fail on 1x7 and
+//     2x9 wrapping boards, which is how the harness is known to be sensitive.
+//   * fixed boundary: cells outside the board are dead
+//   * wrapping: (v + n) % n -- the same expression LifeSimulation uses
+//   * dispatch is rounded up; threads past the edge exit immediately
+//
+// Scalar uniforms are declared `int`, not `uint`. Unity's SetInt binds an `int`
+// uniform reliably; a `uint` uniform of the same name silently kept its default
+// of 0, which made every render thread fall outside the board and painted the
+// viewport a flat screen colour. The state buffers stay uint, as specified.
+
+#pragma kernel Step
+#pragma kernel Render
+
+// ---------------------------------------------------------------------------
+// Shared state
+// ---------------------------------------------------------------------------
+
+int _Width;
+int _Height;
+int _WrapEdges; // 0 = fixed boundary, 1 = wrapping (torus)
+
+StructuredBuffer<uint> _StateIn;
+
+// ---------------------------------------------------------------------------
+// Step
+// ---------------------------------------------------------------------------
+
+RWStructuredBuffer<uint> _StateOut;
+
+// Returns 0 or 1 for one neighbour offset. Mirrors the body of
+// LifeSimulation.CountNeighbours for a single (offsetX, offsetY) pair.
+uint SampleNeighbour(int x, int y, int ox, int oy)
+{
+    int nx = x + ox;
+    int ny = y + oy;
+
+    if (_WrapEdges != 0)
+    {
+        // Offsets are only ever -1, 0 or +1, so nx + w and ny + h are always
+        // non-negative. That makes this identical to C#'s (v + n) % n without
+        // relying on HLSL's negative-modulo behaviour, which differs.
+        nx = (nx + _Width) % _Width;
+        ny = (ny + _Height) % _Height;
+    }
+
+    if (nx < 0 || nx >= _Width || ny < 0 || ny >= _Height)
+        return 0u;
+
+    return _StateIn[ny * _Width + nx];
+}
+
+[numthreads(8, 8, 1)]
+void Step(uint3 id : SV_DispatchThreadID)
+{
+    int x = (int)id.x;
+    int y = (int)id.y;
+
+    // Threads past the edge of the board exit immediately (dispatch is rounded up).
+    if (x >= _Width || y >= _Height)
+        return;
+
+    uint neighbours = 0u;
+    for (int oy = -1; oy <= 1; oy++)
+    {
+        for (int ox = -1; ox <= 1; ox++)
+        {
+            if (ox == 0 && oy == 0)
+                continue;
+
+            // Each offset contributes on its own. No de-duplication.
+            neighbours += SampleNeighbour(x, y, ox, oy);
+        }
+    }
+
+    uint self = _StateIn[y * _Width + x];
+    uint alive = (neighbours == 3u || (self != 0u && neighbours == 2u)) ? 1u : 0u;
+
+    _StateOut[y * _Width + x] = alive;
+}
+
+// ---------------------------------------------------------------------------
+// Render -- state buffer straight to the board viewport texture.
+//
+// Nothing here round-trips through the CPU. The CPU comparison backend uploads
+// its cells into a buffer of the same shape and uses this exact kernel, so both
+// backends share one display path.
+// ---------------------------------------------------------------------------
+
+RWTexture2D<float4> _Display;
+
+int _ViewportW;
+int _ViewportH;
+int _OriginX;      // top-left visible cell
+int _OriginY;
+int _CellPixels;   // integer zoom, >= 1 screen pixel per cell
+int _Decorations;  // grid + outer border; turned off for timing runs
+
+float4 _ScreenColor;
+float4 _GridColor;
+float4 _CellColor;
+float4 _BorderColor;
+
+[numthreads(8, 8, 1)]
+void Render(uint3 id : SV_DispatchThreadID)
+{
+    int px = (int)id.x;
+    int py = (int)id.y;
+
+    if (px >= _ViewportW || py >= _ViewportH)
+        return;
+
+    int cellPixels = max(1, _CellPixels);
+    int cellX = _OriginX + px / cellPixels;
+    int cellY = _OriginY + py / cellPixels;
+
+    float4 color = _ScreenColor;
+
+    if (cellX >= 0 && cellX < _Width && cellY >= 0 && cellY < _Height)
+    {
+        uint alive = _StateIn[cellY * _Width + cellX];
+
+        if (_Decorations != 0)
+        {
+            // The reference renderer insets every cell so the darker screen
+            // colour shows through as a gap, and that gap is what reads as a grid.
+            //
+            // The inset has to leave at least one pixel of cell standing. At one
+            // or two pixels per cell it does not: with cellPixels = 2 and
+            // inset = 0.5 both pixels of the cell are within the inset of an edge,
+            // so every pixel became "gap" and the whole board rendered as a flat
+            // screen-coloured rectangle. Below three pixels the gap is therefore
+            // dropped entirely and cells are drawn solid.
+            float inset = 0.0;
+            if (cellPixels >= 3)
+                inset = min(max(0.5, (float)cellPixels * 0.08), ((float)cellPixels - 1.0) * 0.5);
+
+            int lx = px - (cellX - _OriginX) * cellPixels;
+            int ly = py - (cellY - _OriginY) * cellPixels;
+
+            bool gap = (float)lx < inset
+                    || (float)ly < inset
+                    || (float)(cellPixels - 1 - lx) < inset
+                    || (float)(cellPixels - 1 - ly) < inset;
+
+            color = gap ? _ScreenColor : (alive != 0u ? _CellColor : _GridColor);
+        }
+        else
+        {
+            color = alive != 0u ? _CellColor : _GridColor;
+        }
+    }
+
+    if (_Decorations != 0)
+    {
+        // One-pixel outline around the board's own rectangle, matching the
+        // CellHighlight stroke in the CPU renderer.
+        int boardX0 = (0 - _OriginX) * cellPixels;
+        int boardY0 = (0 - _OriginY) * cellPixels;
+        int boardX1 = (_Width - _OriginX) * cellPixels;
+        int boardY1 = (_Height - _OriginY) * cellPixels;
+
+        bool onBoard = px >= boardX0 && px < boardX1 && py >= boardY0 && py < boardY1;
+        bool onEdge = px == boardX0 || px == boardX1 - 1 || py == boardY0 || py == boardY1 - 1;
+        if (onBoard && onEdge)
+            color = _BorderColor;
+    }
+
+    _Display[id.xy] = color;
+}

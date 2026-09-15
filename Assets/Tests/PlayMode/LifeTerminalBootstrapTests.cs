@@ -229,8 +229,8 @@ namespace ConwayGameOfLife.Tests
             yield return Settle();
 
             var grid = new LifeGridElement();
-            var sim = new LifeSimulation(24, 24);
-            grid.Bind(sim);
+            var backend = new CpuLifeBackend(24, 24);
+            grid.Bind(backend);
 
             int editedCount = 0;
             grid.Edited = () => editedCount++;
@@ -238,14 +238,14 @@ namespace ConwayGameOfLife.Tests
             PaintCellForTest(grid, 3, 4);
 
             Assert.AreEqual(1, editedCount, "painting a cell must raise Edited once");
-            Assert.IsTrue(sim.IsAlive(3, 4), "the painted cell should be alive");
-            Assert.AreEqual(1, sim.Population, "painting one cell should raise the population to 1");
+            Assert.AreEqual(1u, ReadCells(backend)[4 * 24 + 3], "the painted cell should be alive");
+            Assert.AreEqual(1, PopulationOf(backend), "painting one cell should raise the population to 1");
 
             // Painting the same cell again toggles it back off and notifies again.
             PaintCellForTest(grid, 3, 4);
             Assert.AreEqual(2, editedCount, "toggling a cell must raise Edited again");
-            Assert.IsFalse(sim.IsAlive(3, 4), "the second paint should clear the cell");
-            Assert.AreEqual(0, sim.Population);
+            Assert.AreEqual(0u, ReadCells(backend)[4 * 24 + 3], "the second paint should clear the cell");
+            Assert.AreEqual(0, PopulationOf(backend));
 
             // Out-of-range coordinates must be ignored silently, without a notification.
             PaintCellForTest(grid, -1, 0);
@@ -266,6 +266,11 @@ namespace ConwayGameOfLife.Tests
             LifeGridElement grid = FindByClass(root, "life-grid") as LifeGridElement;
             Assert.IsNotNull(grid, "missing LifeGridElement");
 
+            // Stage A only publishes a population from the CPU backend, so this test
+            // pins the backend to CPU. The GPU readout is covered by its own test.
+            SelectBackend(root, gpu: false);
+            yield return null;
+
             // Deterministic starting point: load a known pattern explicitly rather than assuming
             // whichever specimen the previous test happened to leave selected.
             Press(FindPreset(root, "PENTADECATHLON"));
@@ -275,10 +280,10 @@ namespace ConwayGameOfLife.Tests
             Label state = ReadoutValue(root, "STATE");
             Label generation = ReadoutValue(root, "GENERATION");
 
-            LifeSimulation live = ReadSimulation(controller);
-            Assert.AreSame(live, ReadBoundSimulation(grid),
-                "the grid must be bound to the controller's own simulation");
-            Assert.AreEqual(12, live.Population, "expected the pentadecathlon's 12 cells");
+            ILifeBackend live = ReadBackend(controller);
+            Assert.AreSame(live, ReadBoundBackend(grid),
+                "the grid must be bound to the controller's own backend");
+            Assert.AreEqual(12, PopulationOf(live), "expected the pentadecathlon's 12 cells");
             Assert.AreEqual("0012", population.text);
 
             // Start the clock so we can prove an edit pauses it.
@@ -292,13 +297,53 @@ namespace ConwayGameOfLife.Tests
             Assert.IsFalse(ReadRunning(controller), "editing the board must pause the clock");
             Assert.AreEqual("已暂停", state.text, "the state readout should report paused");
             Assert.AreEqual("0000", generation.text, "editing should not advance the generation counter");
-            Assert.AreEqual(13, live.Population, "the edit should have added one live cell to the real board");
+            Assert.AreEqual(13, PopulationOf(live), "the edit should have added one live cell to the real board");
             Assert.AreEqual("0013", population.text, "the population readout must reflect the real board");
             Assert.AreEqual("自由样本 / 手动编辑", ReadSampleCaption(root),
                 "the sample caption should switch to the custom-edit label");
 
             // Restore the interface for the tests that follow.
             Press(FindButton(root, "↺ 重置"));
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator GpuBackend_ReportsUnavailableStatisticsInsteadOfGuessing()
+        {
+            // Stage A implements no GPU statistics. The population readout has to
+            // say so rather than show an invented or stale number.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            DropdownField field = root.Q<DropdownField>("backend-field");
+            Assert.IsNotNull(field, "missing the backend selector");
+
+            if (!field.enabledSelf)
+            {
+                Assert.Ignore("compute shaders unavailable on this machine; the GPU path was not exercised");
+            }
+
+            SelectBackend(root, gpu: true);
+            yield return null;
+
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+            ILifeBackend live = ReadBackend(controller);
+
+            Assert.AreEqual("GPU", live.Name, "the selector did not switch the backend to GPU");
+            Assert.IsFalse(live.TryGetPopulation(out _),
+                "stage A expects the GPU backend to refuse a population query");
+
+            Assert.AreEqual("—", ReadoutValue(root, "POPULATION").text,
+                "the population readout must read as unavailable, not as a number");
+
+            // The generation counter is tracked CPU-side and still works.
+            Press(FindButton(root, "▸ 单步"));
+            yield return null;
+            Assert.AreEqual("0001", ReadoutValue(root, "GENERATION").text,
+                "stepping on the GPU backend should advance the generation counter");
+
+            // Leave the interface on CPU for whatever runs next.
+            SelectBackend(root, gpu: false);
             yield return null;
         }
 
@@ -498,8 +543,14 @@ namespace ConwayGameOfLife.Tests
             Assert.Greater(frames, 10, "not enough frames elapsed to judge the clock");
             Assert.Greater(advanced, 0, "the clock advanced no generations across real frames");
 
-            // Time the rule step itself while the simulation is genuinely live.
-            LifeSimulation live = ReadSimulation(controller);
+            // Time the rule step itself while the board is genuinely live. Pinned to
+            // the CPU backend so the figure stays a CPU rule-engine number, which is
+            // what stage 1 published. GPU rule cost is measured by the stage-A
+            // comparison harness, not here.
+            SelectBackend(GetRoot(), gpu: false);
+            yield return null;
+
+            ILifeBackend live = ReadBackend(controller);
             const int timedSteps = 2000;
             var stepWatch = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < timedSteps; i++)
@@ -509,7 +560,7 @@ namespace ConwayGameOfLife.Tests
 
             stepWatch.Stop();
             double msPerStep = stepWatch.Elapsed.TotalMilliseconds / timedSteps;
-            Debug.Log($"[clock-running] engine step cost while evolving: {msPerStep:F4} ms/generation " +
+            Debug.Log($"[clock-running] CPU engine step cost while evolving: {msPerStep:F4} ms/generation " +
                       $"({timedSteps} steps, board {live.Width}x{live.Height} = {live.Width * live.Height} cells, " +
                       $"Unity Editor runtime)");
 
@@ -568,8 +619,10 @@ namespace ConwayGameOfLife.Tests
             Assert.Greater(advanced, 0, "the micro-benchmark advanced no generations");
 
             double msPerGeneration = sw.Elapsed.TotalMilliseconds / advanced;
+            ILifeBackend benchBackend = ReadBackend(controller);
             Debug.Log($"[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. " +
-                      $"Board 96x64 = 6144 cells. {calls} synchronous Update() calls advanced {advanced} " +
+                      $"Board {benchBackend.Width}x{benchBackend.Height} = {benchBackend.Width * benchBackend.Height} cells, " +
+                      $"backend {benchBackend.Name}. {calls} synchronous Update() calls advanced {advanced} " +
                       $"generations in {sw.Elapsed.TotalMilliseconds:F1} ms => {msPerGeneration:F4} ms/generation. " +
                       $"Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds " +
                       $"reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. " +
@@ -578,10 +631,7 @@ namespace ConwayGameOfLife.Tests
 
         private static int ReadGeneration(LifeTerminalController controller)
         {
-            FieldInfo field = typeof(LifeTerminalController).GetField(
-                "simulation", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(field, "LifeTerminalController.simulation field not found");
-            return ((LifeSimulation)field.GetValue(controller)).Generation;
+            return ReadBackend(controller).Generation;
         }
 
         // --- helpers ----------------------------------------------------------
@@ -591,22 +641,49 @@ namespace ConwayGameOfLife.Tests
             return int.TryParse(label.text, out int value) ? value : -1;
         }
 
-        /// <summary>Reads the controller's private simulation via reflection.</summary>
-        private static LifeSimulation ReadSimulation(LifeTerminalController controller)
+        /// <summary>Reads the controller's private backend via reflection.</summary>
+        private static ILifeBackend ReadBackend(LifeTerminalController controller)
         {
             FieldInfo field = typeof(LifeTerminalController).GetField(
-                "simulation", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(field, "LifeTerminalController.simulation field not found");
-            return (LifeSimulation)field.GetValue(controller);
+                "backend", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "LifeTerminalController.backend field not found");
+            return (ILifeBackend)field.GetValue(controller);
         }
 
-        /// <summary>Reads the simulation a LifeGridElement is bound to, via its private field.</summary>
-        private static LifeSimulation ReadBoundSimulation(LifeGridElement grid)
+        /// <summary>Reads the backend a LifeGridElement is bound to, via its private field.</summary>
+        private static ILifeBackend ReadBoundBackend(LifeGridElement grid)
         {
             FieldInfo field = typeof(LifeGridElement).GetField(
-                "simulation", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(field, "LifeGridElement.simulation field not found");
-            return (LifeSimulation)field.GetValue(grid);
+                "backend", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "LifeGridElement.backend field not found");
+            return (ILifeBackend)field.GetValue(grid);
+        }
+
+        /// <summary>
+        /// Full state readback. Used by presentation tests to check that a click
+        /// really reached the board; the dedicated CPU/GPU equivalence evidence
+        /// lives in the stage-A comparison harness, not here.
+        /// </summary>
+        private static uint[] ReadCells(ILifeBackend backend)
+        {
+            var cells = new uint[backend.Width * backend.Height];
+            Assert.IsTrue(backend.TryReadAllCells(cells), "backend refused a full readback");
+            return cells;
+        }
+
+        private static int PopulationOf(ILifeBackend backend)
+        {
+            Assert.IsTrue(backend.TryGetPopulation(out int population),
+                $"{backend.Name} backend cannot report a population");
+            return population;
+        }
+
+        /// <summary>Drives the backend selector the way a user would.</summary>
+        private static void SelectBackend(VisualElement root, bool gpu)
+        {
+            DropdownField field = root.Q<DropdownField>("backend-field");
+            Assert.IsNotNull(field, "missing the backend selector");
+            field.value = gpu ? "GPU（Compute Shader）" : "CPU（参考实现）";
         }
 
         /// <summary>Reads the controller's private running flag via reflection.</summary>
