@@ -49,6 +49,8 @@ namespace ConwayGameOfLife
         private int originY;
         private int cellPixels = 2;
         private int requestedZoom;
+        private int lastViewportWidth;
+        private int lastViewportHeight;
 
         private bool painting;
         private bool paintValue;
@@ -136,12 +138,23 @@ namespace ConwayGameOfLife
             if (float.IsNaN(width) || float.IsNaN(height) || width <= 0f || height <= 0f)
                 return;
 
+            int viewportWidth = Mathf.Max(1, Mathf.RoundToInt(width * panelScale));
+            int viewportHeight = Mathf.Max(1, Mathf.RoundToInt(height * panelScale));
+
+            // A viewport size change re-frames the board. Without this, switching
+            // between the wide and stacked layouts kept the old origin, which on a
+            // 256-row board could put every visible row outside the board and render
+            // the whole panel as flat screen colour.
+            if (viewportWidth != lastViewportWidth || viewportHeight != lastViewportHeight)
+            {
+                lastViewportWidth = viewportWidth;
+                lastViewportHeight = viewportHeight;
+                centerPending = true;
+            }
+
             // A centring request made before the first layout is honoured here,
             // once the element actually has a size.
             ApplyPendingCenter();
-
-            int viewportWidth = Mathf.Max(1, Mathf.RoundToInt(width * panelScale));
-            int viewportHeight = Mathf.Max(1, Mathf.RoundToInt(height * panelScale));
 
             renderer.EnsureBoard(backend.Width, backend.Height);
             renderer.EnsureViewport(viewportWidth, viewportHeight);
@@ -349,8 +362,24 @@ namespace ConwayGameOfLife
             if (backend == null)
                 return;
 
-            originX = Mathf.Clamp(originX, -backend.Width + 1, backend.Width - 1);
-            originY = Mathf.Clamp(originY, -backend.Height + 1, backend.Height - 1);
+            float width = contentRect.width;
+            float height = contentRect.height;
+            if (float.IsNaN(width) || float.IsNaN(height) || width <= 0f || height <= 0f)
+            {
+                // No layout yet, so there is no viewport to keep the board inside of.
+                originX = Mathf.Clamp(originX, -backend.Width + 1, backend.Width - 1);
+                originY = Mathf.Clamp(originY, -backend.Height + 1, backend.Height - 1);
+                return;
+            }
+
+            // At least one cell must stay on screen. The previous bound allowed the
+            // board to be panned entirely out of view, which reads as a broken display
+            // rather than as an empty region.
+            int visibleX = Mathf.Max(1, Mathf.RoundToInt(width * panelScale / Mathf.Max(1, cellPixels)));
+            int visibleY = Mathf.Max(1, Mathf.RoundToInt(height * panelScale / Mathf.Max(1, cellPixels)));
+
+            originX = Mathf.Clamp(originX, -(visibleX - 1), backend.Width - 1);
+            originY = Mathf.Clamp(originY, -(visibleY - 1), backend.Height - 1);
         }
 
         private void OnGeometryChanged(GeometryChangedEvent evt) => Refresh();

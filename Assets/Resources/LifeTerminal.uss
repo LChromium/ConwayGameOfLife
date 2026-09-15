@@ -122,6 +122,65 @@
 .plate { font-size: 10px; border-width: 1px; border-color: rgb(116, 124, 112); padding: 3px 7px; }
 
 /* ===========================================================================
+   Stage B: noise seeding. Deliberately compact -- the brief asks for five
+   parameters and no noise editor, and every pixel spent here is a pixel the
+   specimen archive loses. The archive keeps its own scroll region.
+   =========================================================================== */
+.seed-row { flex-direction: row; align-items: center; flex-shrink: 0; }
+
+.seed-field { flex-grow: 1; height: 28px; margin: 0 6px 0 0; }
+.seed-field .unity-base-field__label,
+.seed-field .unity-base-text-field__input { color: rgb(224, 225, 201); font-size: 11px; }
+.seed-field .unity-base-text-field__input { background-color: rgb(38, 42, 42); border-width: 1px; border-color: rgb(141, 153, 140); }
+
+.seed-button {
+    width: 30px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    background-color: rgb(75, 87, 84);
+    color: rgb(222, 223, 199);
+    border-width: 1px 1px 3px 1px;
+    border-color: rgb(135, 144, 135) rgb(135, 144, 135) rgb(52, 61, 58) rgb(135, 144, 135);
+    border-radius: 3px;
+}
+.seed-button:hover { background-color: rgb(94, 108, 99); }
+
+.seed-slider { height: 22px; margin: 0; flex-shrink: 0; }
+
+/* The column is 236 units wide. Without a capped width the slider's numeric field
+   runs off the right edge and gets clipped, which is what the first capture showed. */
+.seed-slider .unity-base-slider__label { color: rgb(37, 58, 48); min-width: 50px; font-size: 10px; }
+.seed-slider .unity-base-slider__text-field { width: 46px; flex-grow: 0; flex-shrink: 0; }
+.seed-slider .unity-base-slider__text-field .unity-base-text-field__input {
+    background-color: rgb(38, 42, 42);
+    color: rgb(224, 225, 201);
+    font-size: 10px;
+    padding: 0 2px;
+}
+.seed-slider .unity-base-slider__drag-container { margin-left: 2px; margin-right: 2px; }
+
+.seed-mode { height: 28px; }
+
+.seed-density { color: rgb(37, 58, 48); font-size: 10px; margin-top: 2px; flex-shrink: 0; }
+
+.seed-actions { flex-direction: row; flex-shrink: 0; margin-top: 4px; }
+.control-small {
+    flex-grow: 1;
+    height: 26px;
+    min-width: 0;
+    margin: 0 5px 0 0;
+    font-size: 11px;
+    background-color: rgb(75, 87, 84);
+    color: rgb(222, 223, 199);
+    border-width: 1px 1px 3px 1px;
+    border-color: rgb(135, 144, 135) rgb(135, 144, 135) rgb(52, 61, 58) rgb(135, 144, 135);
+    border-radius: 3px;
+}
+.control-small:hover { background-color: rgb(94, 108, 99); }
+.control-small:disabled { background-color: rgb(62, 71, 68); color: rgb(130, 136, 128); }
+
+/* ===========================================================================
    Narrow layout (the "compact" class is toggled from LifeTerminalController
    when the root's resolved width cannot host two columns).
    USS has no media queries - there is no @media and no width-based selector,
@@ -162,3 +221,12 @@
 .compact .preset-scroll { width: 100%; flex-grow: 1; min-height: 132px; }
 .compact .field-label { width: 100%; }
 .compact .dropdown { width: 180px; }
+
+/* In the stacked layout the library becomes a wrapping row, so the seeding block
+   takes a full row of its own rather than a narrow column. */
+.compact .seed-row { width: 100%; }
+.compact .seed-field { width: 140px; flex-grow: 0; }
+.compact .seed-slider { width: 220px; margin-right: 10px; }
+.compact .seed-actions { width: 100%; }
+.compact .control-small { flex-grow: 0; min-width: 84px; }
+.compact .seed-density { width: 100%; }

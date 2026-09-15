@@ -74,6 +74,17 @@ namespace ConwayGameOfLife
         private float accumulator;
         private int geometryLogs;
 
+        // Stage-B seeding controls.
+        private DropdownField seedingModeField;
+        private IntegerField seedField;
+        private Slider densitySlider;
+        private Slider scaleSlider;
+        private Slider warpSlider;
+        private Slider clusterSlider;
+        private Label seedingDensityLabel;
+        private Button seedingApplyButton;
+        private Button seedingCancelButton;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Bootstrap()
         {
@@ -255,6 +266,8 @@ namespace ConwayGameOfLife
             LogSeedingCost("preview");
             grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
             sampleLabel.text = $"预览（未应用）/ {Seeding.Parameters}";
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
             RefreshReadouts();
         }
 
@@ -273,6 +286,8 @@ namespace ConwayGameOfLife
 
             CaptureInitialState(board, $"播种 / {Seeding.AppliedParameters}");
             Restart();
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
         }
 
         /// <summary>
@@ -296,6 +311,8 @@ namespace ConwayGameOfLife
             Seeding.Cancel();
             grid.ClearPreview();
             sampleLabel.text = initialLabel;
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
             RefreshReadouts();
         }
 
@@ -541,6 +558,8 @@ namespace ConwayGameOfLife
             });
             library.Add(backendField);
 
+            BuildSeedingPanel(library);
+
             workspace.Add(library);
             machine.Add(workspace);
 
@@ -575,7 +594,6 @@ namespace ConwayGameOfLife
             element.AddToClassList(className);
             return element;
         }
-
         private static Label Label(string text, string className)
         {
             Label label = new(text);
@@ -599,6 +617,134 @@ namespace ConwayGameOfLife
             readout.Add(value);
             parent.Add(readout);
             return value;
+        }
+
+        // -- stage B seeding panel ---------------------------------------------
+
+        /// <summary>
+        /// Five parameters and three actions, nothing more. Every row here is height
+        /// the specimen archive loses, so the controls are deliberately compact.
+        /// </summary>
+        private void BuildSeedingPanel(VisualElement library)
+        {
+            library.Add(Label("噪声播种", "field-label"));
+
+            List<string> modes = new() { FbmModeLabel, UniformModeLabel };
+            seedingModeField = new DropdownField(modes, FbmModeLabel);
+            seedingModeField.name = "seed-mode";
+            seedingModeField.AddToClassList("dropdown");
+            seedingModeField.AddToClassList("seed-mode");
+            seedingModeField.RegisterValueChangedCallback(_ => OnSeedingEdited());
+            library.Add(seedingModeField);
+
+            VisualElement seedRow = Element("seed-row");
+            seedField = new IntegerField("种子") { value = Seeding.Parameters.Seed };
+            seedField.name = "seed-field";
+            seedField.AddToClassList("seed-field");
+            seedField.RegisterValueChangedCallback(_ => OnSeedingEdited());
+            seedRow.Add(seedField);
+            seedRow.Add(Button("⟳", RerollSeed, "seed-button"));
+            library.Add(seedRow);
+
+            densitySlider = AddSeedingSlider(library, "密度", 0.05f, 0.60f,
+                Seeding.Parameters.Density, "seed-density");
+            scaleSlider = AddSeedingSlider(library, "团簇尺度", 4f, 160f,
+                Seeding.Parameters.Scale, "seed-scale");
+            warpSlider = AddSeedingSlider(library, "扭曲强度", 0f, 40f,
+                Seeding.Parameters.WarpStrength, "seed-warp");
+            clusterSlider = AddSeedingSlider(library, "聚集强度", 0f, 1f,
+                Seeding.Parameters.ClusterStrength, "seed-cluster");
+
+            seedingDensityLabel = Label(string.Empty, "seed-density");
+            seedingDensityLabel.name = "seed-density-readout";
+            library.Add(seedingDensityLabel);
+
+            VisualElement actions = Element("seed-actions");
+            seedingApplyButton = Button("应用", ApplySeeding, "control-small");
+            seedingApplyButton.name = "seed-apply";
+            seedingCancelButton = Button("取消", CancelSeeding, "control-small");
+            seedingCancelButton.name = "seed-cancel";
+            actions.Add(Button("预览", PreviewSeeding, "control-small"));
+            actions.Add(seedingApplyButton);
+            actions.Add(seedingCancelButton);
+            library.Add(actions);
+
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
+        }
+
+        private Slider AddSeedingSlider(VisualElement parent, string caption, float low, float high,
+            float value, string name)
+        {
+            Slider slider = new(low, high) { label = caption, value = value, showInputField = true };
+            slider.name = name;
+            slider.AddToClassList("seed-slider");
+            slider.RegisterValueChangedCallback(_ => OnSeedingEdited());
+            parent.Add(slider);
+            return slider;
+        }
+
+        private const string FbmModeLabel = "fBm 团簇";
+        private const string UniformModeLabel = "均匀随机";
+
+        private LifeNoiseParameters CurrentSeedingParameters() => new(
+            seedingModeField.value == UniformModeLabel ? LifeSeedingMode.Uniform : LifeSeedingMode.Fbm,
+            seedField.value,
+            densitySlider.value,
+            scaleSlider.value,
+            warpSlider.value,
+            clusterSlider.value);
+
+        /// <summary>
+        /// Editing a control stores the new parameters and, if a candidate is on
+        /// screen, regenerates it. The live board is not part of this path at all.
+        /// </summary>
+        private void OnSeedingEdited()
+        {
+            if (Seeding == null || seedingModeField == null)
+                return;
+
+            Seeding.SetParameters(CurrentSeedingParameters());
+
+            if (Seeding.HasCandidate)
+                grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
+
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
+        }
+
+        /// <summary>
+        /// Walks the seed to a different value. Kept behind its own button because
+        /// changing the seed is meant to be deliberate.
+        /// </summary>
+        private void RerollSeed()
+        {
+            int next = unchecked(Seeding.Parameters.Seed * 1664525 + 1013904223);
+            seedField.SetValueWithoutNotify(next);
+            OnSeedingEdited();
+        }
+
+        private void UpdateSeedingReadout()
+        {
+            if (seedingDensityLabel == null)
+                return;
+
+            // Kept short on purpose: the column is 236 units wide and a longer
+            // sentence is clipped rather than wrapped.
+            seedingDensityLabel.text = Seeding.HasCandidate
+                ? $"实际 {Seeding.CandidateDensity:0.0000} · {Seeding.LastGenerationMilliseconds:F0} ms"
+                : "实际 —（尚未生成候选）";
+
+            seedingDensityLabel.tooltip =
+                $"基础密度 {Seeding.Parameters.Density:0.00} 是概率，不是人口承诺；" +
+                "聚集会把实际密度推离它。";
+        }
+
+        private void UpdateSeedingActions()
+        {
+            bool hasCandidate = Seeding != null && Seeding.HasCandidate;
+            seedingApplyButton?.SetEnabled(hasCandidate);
+            seedingCancelButton?.SetEnabled(hasCandidate);
         }
 
         private static string KindName(LifePattern pattern)
