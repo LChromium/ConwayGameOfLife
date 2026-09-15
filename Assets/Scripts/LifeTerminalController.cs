@@ -191,6 +191,10 @@ namespace ConwayGameOfLife
             // "-lifePerf" runs the stage-A measurement pass and quits.
             if (HasFlag("-lifePerf"))
                 gameObject.AddComponent<LifePerfProbe>();
+
+            // "-lifeBench" runs the stage-C large-board benchmark and quits.
+            if (HasFlag("-lifeBench"))
+                gameObject.AddComponent<LifeBoardBench>();
         }
 
         private static bool HasFlag(string flag)

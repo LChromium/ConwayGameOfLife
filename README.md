@@ -191,7 +191,8 @@ Assets/
 │   ├── LifeSeedingSession.cs      # 参数 / 候选 / 后台生成状态机（纯 C#）
 │   ├── PanelScreenFit.cs          # 面板缩放数学（纯函数，可跨分辨率单测）
 │   ├── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
-│   ├── LifePerfProbe.cs           # Player 内 `-lifePerf` 测量探针
+│   ├── LifePerfProbe.cs           # Player 内 `-lifePerf` 测量探针（阶段 A）
+│   ├── LifeBoardBench.cs          # Player 内 `-lifeBench` 大棋盘基准（阶段 C，五口径分开）
 │   └── RuntimeLayoutProbe.cs      # Player 内 `-lifeLayoutProbe` 布局校验探针
 ├── Tests/
 │   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机（78 项）
@@ -206,7 +207,7 @@ Assets/
 │       ├── LifeSeedingIntegrationTests.cs
 │       └── GpuCpuEquivalenceTests.cs
 ├── Editor/
-│   ├── PlayerBuild.cs             # 开发版 Player 构建入口（-executeMethod 调用）
+│   ├── PlayerBuild.cs             # Player 构建入口：开发版 / 帧时间版 / 发布版
 │   └── CaptureLayoutTool.cs       # 编辑器内布局截图诊断
 ├── link.xml                       # 保留运行时探针，防止托管剥离移除
 ├── Resources/
@@ -218,12 +219,17 @@ Assets/
     ├── Implementation.md          # 实现文档：模块、数据流、扩展方式
     ├── StageA-Gpu.md              # 阶段 A：GPU 演化与显示
     ├── StageB-Seeding.md          # 阶段 B：fBM + 域扭曲概率播种
+    ├── StageC-Benchmark.md        # 阶段 C：大棋盘基准（生成/上传/演化/显示/内存）
     └── PROJECT_LOG.md             # 工作记录：声称→证据对照、决策、未决张力
 
 Screenshots/                        # 真实 Player 截图与原始测量记录
 Tools/                              # 截图脚本（客户区抓图，DPI 感知）
 .verify/                            # 独立校验工具（不属于 Unity 工程）
 ```
+
+> 阶段 C 的基准原始记录在仓库根目录 `stage-c-bench.jsonl`（10 条：开发版 ×4 尺寸 ×2 构建，
+> 发布版 ×2 尺寸）。每条记录自带 `buildGuid` / `dataPath` / `isDevelopmentBuild`，
+> 因此一个数字来自哪个配置不需要靠文件名猜。
 
 > `.verify/`、`test-results-*.xml` 与根目录的图表工件都不在 `Assets/` 下，
 > 不会被 Unity 导入，也不进入构建产物。
@@ -251,7 +257,13 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 > **阶段 B（fBM + 域扭曲概率播种）已归档**，标签 `stage-b-life-seeding`（主体验收）与
 > `stage-b-life-seeding-r2`（请求身份补丁）；清单、证据与保留问题见
 > [`Assets/Docs/StageB-Seeding.md`](Assets/Docs/StageB-Seeding.md) §11。
-> 主体验收通过，范围已关闭，不再扩展；阶段 C 优先做大棋盘基准。
+> 主体验收通过，范围已关闭，不再扩展。
+
+> **阶段 C 进行中**：先做**大棋盘基准**（256²/1024²/2048²/4096²），
+> 生成、上传、演化、显示、内存占用**五个口径分开记录**，
+> 见 [`Assets/Docs/StageC-Benchmark.md`](Assets/Docs/StageC-Benchmark.md) 与 `stage-c-bench.jsonl`。
+> 亚像素密度总览按评审意见**等出现真实显示问题再另行实施**；
+> GPU 独立生成噪声仍是**远期可选实验**；CPU 单生成器保留。
 
 ---
 

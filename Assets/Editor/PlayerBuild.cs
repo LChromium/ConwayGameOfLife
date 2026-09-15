@@ -21,28 +21,67 @@ namespace ConwayGameOfLife.EditorTools
     public static class PlayerBuild
     {
         private const string OutputPath = "Builds/LifeTerminal.exe";
+        private const string BenchmarkOutputPath = "Builds/LifeTerminal-bench.exe";
+        private const string ReleaseOutputPath = "Builds/LifeTerminal-release.exe";
 
-        public static void BuildWindows64()
+        public static void BuildWindows64() => Build(OutputPath, BuildOptions.Development);
+
+        /// <summary>
+        /// The second configuration the stage-C benchmark needs. Two of its figures --
+        /// GPU frame time and graphics-driver memory -- are only populated in a
+        /// development build, and frame timings additionally need
+        /// <c>PlayerSettings.enableFrameTimingStats</c>, which the project keeps off for
+        /// the shipped player.
+        ///
+        /// <para>The setting is flipped for the build and put back afterwards, so the
+        /// benchmark's diagnostics do not silently become part of the shipped
+        /// configuration. Every record carries <c>isDevelopmentBuild</c> so a reader can
+        /// tell which configuration a number came from.</para>
+        /// </summary>
+        public static void BuildBenchmarkWindows64()
+        {
+            bool previous = PlayerSettings.enableFrameTimingStats;
+            try
+            {
+                PlayerSettings.enableFrameTimingStats = true;
+                Build(BenchmarkOutputPath, BuildOptions.Development);
+            }
+            finally
+            {
+                PlayerSettings.enableFrameTimingStats = previous;
+            }
+        }
+
+        /// <summary>
+        /// A release player, for one question the benchmark cannot answer from development
+        /// builds: do the numbers hold in the configuration that ships? Two limits are
+        /// expected and are recorded by the probe rather than worked around: without the
+        /// development defines <c>FrameTimingManager</c> reports nothing and
+        /// <c>Profiler.GetAllocatedMemoryForGraphicsDriver</c> stays at zero.
+        /// </summary>
+        public static void BuildReleaseWindows64() => Build(ReleaseOutputPath, BuildOptions.None);
+
+        private static void Build(string outputPath, BuildOptions options)
         {
             try
             {
                 Directory.CreateDirectory("Builds");
 
-                var options = new BuildPlayerOptions
+                var playerOptions = new BuildPlayerOptions
                 {
                     scenes = new[] { "Assets/Scenes/SampleScene.unity" },
-                    locationPathName = OutputPath,
+                    locationPathName = outputPath,
                     target = BuildTarget.StandaloneWindows64,
-                    options = BuildOptions.Development,
+                    options = options,
                 };
 
-                BuildReport report = BuildPipeline.BuildPlayer(options);
+                BuildReport report = BuildPipeline.BuildPlayer(playerOptions);
                 BuildSummary summary = report.summary;
 
                 Debug.Log($"[PlayerBuild] result={summary.result} " +
                           $"size={summary.totalSize} bytes " +
                           $"errors={summary.totalErrors} warnings={summary.totalWarnings} " +
-                          $"output={OutputPath}");
+                          $"options={options} output={outputPath}");
 
                 if (summary.result != BuildResult.Succeeded)
                 {
