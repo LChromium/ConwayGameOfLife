@@ -85,6 +85,27 @@ namespace ConwayGameOfLife
         private Button seedingApplyButton;
         private Button seedingCancelButton;
 
+        // Seeding edits are debounced, then generated off the main thread.
+        private const float SeedingDebounceSeconds = 0.2f;
+        private bool seedingDirty;
+        private float seedingDirtySince;
+        private bool seedingWasGenerating;
+
+        // Command-line "-lifeSeedApply" waits for the background generation to land.
+        private bool seedingApplyWhenReady;
+
+        /// <summary>True from the moment a preview is requested until it is applied or cancelled.</summary>
+        private bool previewMode;
+
+        // What the panel showed before a candidate went up, so cancelling restores
+        // the display rather than guessing from the experiment's initial label.
+        private string captionBeforePreview;
+        private int patternBeforePreview;
+        private bool hadSelectionBeforePreview;
+
+        private Button playButtonRef;
+        private Button stepButtonRef;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Bootstrap()
         {
@@ -245,28 +266,36 @@ namespace ConwayGameOfLife
                 ReadFloatFromCommandLine("-lifeCluster", defaults.ClusterStrength));
 
             Seeding.SetParameters(parameters);
+            SyncSeedingControlsFromSession();
 
             if (HasFlag("-lifeSeedApply"))
-                ApplySeeding();
-            else if (HasFlag("-lifeSeedPreview"))
+            {
+                seedingApplyWhenReady = true;
                 PreviewSeeding();
+            }
+            else if (HasFlag("-lifeSeedPreview"))
+            {
+                PreviewSeeding();
+            }
         }
 
         /// <summary>
-        /// Generates a candidate and puts it on screen in the preview colour. The real
-        /// board is not touched: the candidate goes into the display path only.
+        /// Puts a candidate on screen. The real board is not touched: the candidate
+        /// goes into the display path only. Generation is requested, not performed --
+        /// it runs on a background thread and lands in <see cref="PumpSeeding"/>.
         /// </summary>
         public void PreviewSeeding()
         {
             Stop();
 
-            if (!Seeding.GenerateCandidate())
-                return;
+            if (!previewMode)
+            {
+                RememberDisplayState();
+                previewMode = true;
+            }
 
-            LogSeedingCost("preview");
-            grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
-            sampleLabel.text = $"预览（未应用）/ {Seeding.Parameters}";
-            UpdateSeedingReadout();
+            seedingDirty = false;
+            Seeding.RequestCandidate();
             UpdateSeedingActions();
             RefreshReadouts();
         }
@@ -274,46 +303,116 @@ namespace ConwayGameOfLife
         /// <summary>
         /// Confirms the candidate: it becomes the experiment's initial state, the
         /// generation counter goes back to zero, and the clock stays paused.
+        ///
+        /// If a generation is still running this waits for it rather than applying a
+        /// stale board -- the candidate on screen and the candidate applied must be
+        /// the same one.
         /// </summary>
         public void ApplySeeding()
         {
-            if (!Seeding.HasCandidate && !Seeding.GenerateCandidate())
+            if (Seeding.IsGenerating)
+            {
+                seedingApplyWhenReady = true;
+                UpdateSeedingActions();
+                return;
+            }
+
+            byte[] board = Seeding.Apply();
+            if (board == null)
                 return;
 
-            LogSeedingCost("apply");
-            byte[] board = Seeding.Apply();
             grid.ClearPreview();
+            previewMode = false;
+            seedingApplyWhenReady = false;
 
-            CaptureInitialState(board, $"播种 / {Seeding.AppliedParameters}");
+            string label = $"播种 / {Seeding.AppliedParameters}";
+            CaptureInitialState(board, label);
             Restart();
+
+            // Also drops the specimen highlight: the board is no longer that specimen.
+            SelectCustom(label);
+            SyncSeedingControlsFromSession();
             UpdateSeedingReadout();
             UpdateSeedingActions();
         }
 
         /// <summary>
-        /// Generating a large board on the CPU is not free, so the cost is reported
-        /// rather than left implicit. Shown as the realised density too: the base
-        /// density is a probability, not a population promise.
+        /// Throws the candidate away and restores what the panel showed before the
+        /// preview started. The board was never moved, so only the display has to be
+        /// put back -- and it is put back from a snapshot taken on entry, not from the
+        /// experiment's label, which would be wrong for a hand-edited board.
+        /// </summary>
+        public void CancelSeeding()
+        {
+            if (!previewMode && !Seeding.HasCandidate && !Seeding.IsGenerating)
+                return;
+
+            Seeding.Cancel();
+            grid.ClearPreview();
+            previewMode = false;
+            seedingDirty = false;
+            seedingApplyWhenReady = false;
+
+            RestoreDisplayState();
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
+            RefreshReadouts();
+        }
+
+        /// <summary>
+        /// Commands that replace or move the board must not run underneath a candidate:
+        /// otherwise the caption and the picture disagree. Every such command ends the
+        /// preview first.
+        /// </summary>
+        private void EndPreviewForCommand()
+        {
+            if (!previewMode && !Seeding.HasCandidate && !Seeding.IsGenerating)
+                return;
+
+            Seeding.Cancel();
+            grid.ClearPreview();
+            previewMode = false;
+            seedingDirty = false;
+            seedingApplyWhenReady = false;
+        }
+
+        private void RememberDisplayState()
+        {
+            captionBeforePreview = sampleLabel.text;
+            patternBeforePreview = selectedPattern;
+            hadSelectionBeforePreview = false;
+
+            for (int i = 0; i < presetButtons.Length; i++)
+            {
+                if (presetButtons[i].ClassListContains("selected"))
+                {
+                    hadSelectionBeforePreview = true;
+                    break;
+                }
+            }
+        }
+
+        private void RestoreDisplayState()
+        {
+            sampleLabel.text = captionBeforePreview;
+
+            for (int i = 0; i < presetButtons.Length; i++)
+            {
+                bool selected = hadSelectionBeforePreview && i == patternBeforePreview;
+                presetButtons[i].EnableInClassList("selected", selected);
+            }
+        }
+
+        /// <summary>
+        /// Generating a large board is not free, so the cost is reported rather than
+        /// left implicit. Shown alongside the realised density too: the base density
+        /// is a probability, not a population promise.
         /// </summary>
         private void LogSeedingCost(string what)
         {
             Debug.Log($"[Life] seeding {what}: {Seeding.LastGenerationMilliseconds:F1} ms for " +
                       $"{gridWidth}x{gridHeight} ({Seeding.CandidateAliveCount} alive, " +
-                      $"realised density {Seeding.CandidateDensity:F4}) -- {Seeding.Parameters}");
-        }
-
-        /// <summary>Throws the candidate away. The board was never moved, so there is nothing to restore.</summary>
-        public void CancelSeeding()
-        {
-            if (!Seeding.HasCandidate)
-                return;
-
-            Seeding.Cancel();
-            grid.ClearPreview();
-            sampleLabel.text = initialLabel;
-            UpdateSeedingReadout();
-            UpdateSeedingActions();
-            RefreshReadouts();
+                      $"realised density {Seeding.CandidateDensity:F4}) -- {Seeding.CandidateParameters}");
         }
 
         private void OnDestroy()
@@ -436,6 +535,8 @@ namespace ConwayGameOfLife
 
         private void Update()
         {
+            PumpSeeding();
+
             if (!running || backend == null)
                 return;
 
@@ -458,6 +559,75 @@ namespace ConwayGameOfLife
                 RefreshReadouts();
                 grid.MarkBoardDirty();
             }
+        }
+
+        /// <summary>
+        /// Drives the seeding pipeline: fires a debounced generation request, adopts
+        /// finished candidates, and keeps the panel's enabled state in step. Runs every
+        /// frame because the generator is on a background thread; nothing here blocks.
+        /// </summary>
+        private void PumpSeeding()
+        {
+            if (Seeding == null || seedingModeField == null)
+                return;
+
+            if (seedingDirty && !Seeding.IsGenerating &&
+                Time.unscaledTime - seedingDirtySince >= SeedingDebounceSeconds)
+            {
+                seedingDirty = false;
+                Seeding.RequestCandidate();
+            }
+
+            bool adopted = Seeding.PumpGeneration();
+
+            if (adopted)
+            {
+                LogSeedingCost("generated");
+
+                if (previewMode)
+                {
+                    grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
+                    sampleLabel.text = $"预览（未应用）/ {Seeding.CandidateParameters}";
+                }
+
+                if (seedingApplyWhenReady)
+                {
+                    seedingApplyWhenReady = false;
+                    ApplySeeding();
+                    return;
+                }
+            }
+
+            if (adopted || Seeding.IsGenerating != seedingWasGenerating)
+            {
+                seedingWasGenerating = Seeding.IsGenerating;
+                UpdateSeedingReadout();
+                UpdateSeedingActions();
+            }
+        }
+
+        /// <summary>
+        /// Writes the session's parameters back into every control, without firing
+        /// their callbacks. Every path that changes parameters -- the command line,
+        /// random seeding, and the controls themselves -- goes through here, so the
+        /// caption, the realised-density readout and the candidate always describe
+        /// the same set. Without it, dragging one slider reads the stale values of
+        /// the others and overwrites them.
+        /// </summary>
+        private void SyncSeedingControlsFromSession()
+        {
+            if (seedingModeField == null)
+                return;
+
+            LifeNoiseParameters parameters = Seeding.Parameters;
+
+            seedingModeField.SetValueWithoutNotify(
+                parameters.Mode == LifeSeedingMode.Uniform ? UniformModeLabel : FbmModeLabel);
+            seedField.SetValueWithoutNotify(parameters.Seed);
+            densitySlider.SetValueWithoutNotify(parameters.Density);
+            scaleSlider.SetValueWithoutNotify(parameters.Scale);
+            warpSlider.SetValueWithoutNotify(parameters.WarpStrength);
+            clusterSlider.SetValueWithoutNotify(parameters.ClusterStrength);
         }
 
         private void BuildInterface(VisualElement root)
@@ -565,8 +735,10 @@ namespace ConwayGameOfLife
 
             VisualElement controls = Element("controls");
             playButton = Button("▶ 运行", ToggleRunning, "control", "primary");
+            playButtonRef = playButton;
             controls.Add(playButton);
-            controls.Add(Button("▸ 单步", StepOnce, "control"));
+            stepButtonRef = Button("▸ 单步", StepOnce, "control");
+            controls.Add(stepButtonRef);
             controls.Add(Button("↺ 重置", ResetToInitialState, "control"));
             controls.Add(Label("速率", "speed-label"));
             speedSlider = new SliderInt(1, 20) { value = 5 };
@@ -696,8 +868,9 @@ namespace ConwayGameOfLife
             clusterSlider.value);
 
         /// <summary>
-        /// Editing a control stores the new parameters and, if a candidate is on
-        /// screen, regenerates it. The live board is not part of this path at all.
+        /// Stores the edited parameters and marks the candidate out of date. The actual
+        /// generation is debounced and runs on a background thread: one slider drag
+        /// fires many events, and at 1024x1024 each generation is roughly half a second.
         /// </summary>
         private void OnSeedingEdited()
         {
@@ -706,8 +879,8 @@ namespace ConwayGameOfLife
 
             Seeding.SetParameters(CurrentSeedingParameters());
 
-            if (Seeding.HasCandidate)
-                grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
+            seedingDirty = true;
+            seedingDirtySince = Time.unscaledTime;
 
             UpdateSeedingReadout();
             UpdateSeedingActions();
@@ -731,20 +904,50 @@ namespace ConwayGameOfLife
 
             // Kept short on purpose: the column is 236 units wide and a longer
             // sentence is clipped rather than wrapped.
-            seedingDensityLabel.text = Seeding.HasCandidate
-                ? $"实际 {Seeding.CandidateDensity:0.0000} · {Seeding.LastGenerationMilliseconds:F0} ms"
-                : "实际 —（尚未生成候选）";
+            if (Seeding.IsGenerating)
+            {
+                seedingDensityLabel.text = "生成中…";
+            }
+            else if (Seeding.CandidateIsStale)
+            {
+                seedingDensityLabel.text = "预览待更新";
+            }
+            else if (Seeding.HasCandidate)
+            {
+                seedingDensityLabel.text =
+                    $"实际 {Seeding.CandidateDensity:0.0000} · {Seeding.LastGenerationMilliseconds:F0} ms";
+            }
+            else
+            {
+                seedingDensityLabel.text = "实际 —（尚未生成候选）";
+            }
 
             seedingDensityLabel.tooltip =
                 $"基础密度 {Seeding.Parameters.Density:0.00} 是概率，不是人口承诺；" +
                 "聚集会把实际密度推离它。";
         }
 
+        /// <summary>
+        /// Single place that decides what may be pressed. While a candidate is on
+        /// screen the clock, single-stepping and painting are all unavailable: they
+        /// would change the real board underneath a picture that no longer describes it.
+        /// Panning and zooming stay available because they only move the view.
+        /// </summary>
         private void UpdateSeedingActions()
         {
-            bool hasCandidate = Seeding != null && Seeding.HasCandidate;
-            seedingApplyButton?.SetEnabled(hasCandidate);
-            seedingCancelButton?.SetEnabled(hasCandidate);
+            if (Seeding == null || seedingApplyButton == null)
+                return;
+
+            bool previewing = previewMode || Seeding.HasCandidate || Seeding.IsGenerating;
+            bool canApply = Seeding.HasCandidate && !Seeding.IsGenerating && !Seeding.CandidateIsStale;
+
+            seedingApplyButton.SetEnabled(canApply);
+            seedingCancelButton.SetEnabled(previewing);
+
+            playButtonRef?.SetEnabled(!previewing);
+            stepButtonRef?.SetEnabled(!previewing);
+
+            grid?.SetEditingEnabled(!previewing);
         }
 
         private static string KindName(LifePattern pattern)
@@ -782,6 +985,8 @@ namespace ConwayGameOfLife
         /// </summary>
         private void SwitchBackend(bool gpu)
         {
+            EndPreviewForCommand();
+
             if (running)
                 Stop();
 
@@ -790,12 +995,16 @@ namespace ConwayGameOfLife
             RestoreInitialState();
             RefreshReadouts();
             RefreshState();
+            UpdateSeedingActions();
         }
 
         // -- commands ----------------------------------------------------------
 
         private void LoadPattern(int index)
         {
+            EndPreviewForCommand();
+            Seeding.ForgetApplied();
+
             selectedPattern = index;
             LifePattern pattern = LifePatterns.All[index];
 
@@ -807,30 +1016,49 @@ namespace ConwayGameOfLife
 
             for (int i = 0; i < presetButtons.Length; i++)
                 presetButtons[i].EnableInClassList("selected", i == index);
+
+            UpdateSeedingActions();
         }
 
         private void Randomize()
         {
-            // Routed through the seeding session so there is one random path, not two.
-            // Uniform mode with the same hash as the fBm path, so it is the control
-            // group the brief asks for and it is reproducible from its seed.
+            EndPreviewForCommand();
             Stop();
-            Seeding.SetParameters(new LifeNoiseParameters(
-                LifeSeedingMode.Uniform, Environment.TickCount, 0.22f, 48f, 0f, 0f));
-            Seeding.GenerateCandidate();
 
-            byte[] board = Seeding.Apply();
-            CaptureInitialState(board, $"播种 / 均匀随机 seed {Seeding.AppliedParameters.Seed}");
+            // Routed through the seeding parameters so there is one random path, not
+            // two, and the controls end up describing the board that was produced.
+            //
+            // Generated inline rather than through the preview pipeline: uniform
+            // seeding is one hash per cell -- a few milliseconds even at 1024x1024 --
+            // and the pipeline exists for the half-second fBm case. Going through it
+            // would leave a candidate pending that nothing is displaying.
+            var parameters = new LifeNoiseParameters(
+                LifeSeedingMode.Uniform, Environment.TickCount, 0.22f, 48f, 0f, 0f);
+            Seeding.SetParameters(parameters);
+            SyncSeedingControlsFromSession();
+            Seeding.ForgetApplied();
+
+            var board = new byte[gridWidth * gridHeight];
+            LifeNoiseSeeding.Generate(parameters, gridWidth, gridHeight, board);
+
+            string label = $"播种 / 均匀随机 seed {parameters.Seed}";
+            CaptureInitialState(board, label);
             Restart();
-            SelectCustom(initialLabel);
+            SelectCustom(label);
+            UpdateSeedingReadout();
+            UpdateSeedingActions();
         }
 
         private void Clear()
         {
+            EndPreviewForCommand();
+            Seeding.ForgetApplied();
+
             byte[] board = new byte[gridWidth * gridHeight];
             CaptureInitialState(board, "自由样本 / 空白");
             Restart();
             SelectCustom("自由样本 / 空白");
+            UpdateSeedingActions();
         }
 
         /// <summary>
@@ -839,9 +1067,12 @@ namespace ConwayGameOfLife
         /// </summary>
         private void ResetToInitialState()
         {
+            EndPreviewForCommand();
+
             Stop();
             RestoreInitialState();
             RefreshReadouts();
+            UpdateSeedingActions();
         }
 
         private void RestoreInitialState()
@@ -860,11 +1091,6 @@ namespace ConwayGameOfLife
         {
             initialState = board;
             initialLabel = label;
-
-            // The seeding parameters only describe the board while that board is the
-            // one they produced. Loading a specimen or clearing makes them stale.
-            if (Seeding != null && !label.StartsWith("播种", StringComparison.Ordinal))
-                Seeding.ForgetApplied();
         }
 
         private void Restart()
@@ -876,6 +1102,11 @@ namespace ConwayGameOfLife
 
         private void ToggleRunning()
         {
+            // The clock is part of the board, and a candidate preview must not be run
+            // over. The button is disabled in this state; this is the second lock.
+            if (previewMode)
+                return;
+
             running = !running;
             accumulator = 0f;
             RefreshState();
@@ -890,6 +1121,9 @@ namespace ConwayGameOfLife
 
         private void StepOnce()
         {
+            if (previewMode)
+                return;
+
             Stop();
             backend.Step();
             grid.MarkBoardDirty();

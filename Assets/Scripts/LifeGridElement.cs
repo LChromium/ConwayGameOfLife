@@ -56,6 +56,7 @@ namespace ConwayGameOfLife
         private bool paintValue;
         private bool panning;
         private bool centerPending;
+        private bool editingEnabled = true;
         private int diagnosticLogs;
         private Vector2 panAnchor;
 
@@ -280,6 +281,16 @@ namespace ConwayGameOfLife
 
         public bool PreviewActive => previewActive;
 
+        /// <summary>
+        /// Turns hand-editing on or off. The terminal switches it off while a seeding
+        /// candidate is on screen: painting would change the real board underneath a
+        /// picture that no longer describes it. Panning and zooming stay available --
+        /// they only move the view.
+        /// </summary>
+        public void SetEditingEnabled(bool value) => editingEnabled = value;
+
+        public bool EditingEnabled => editingEnabled;
+
         // -- view transform ----------------------------------------------------
 
         public void ResetView()
@@ -426,7 +437,7 @@ namespace ConwayGameOfLife
                 return;
             }
 
-            if (evt.button != 0 || !TryGetCell(evt.localPosition, out int x, out int y))
+            if (evt.button != 0 || !editingEnabled || !TryGetCell(evt.localPosition, out int x, out int y))
                 return;
 
             painting = true;
@@ -476,7 +487,7 @@ namespace ConwayGameOfLife
 
         private void Paint(int x, int y)
         {
-            if (backend == null || IsAlive(x, y) == paintValue)
+            if (backend == null || !editingEnabled || IsAlive(x, y) == paintValue)
                 return;
 
             backend.SetCell(x, y, paintValue);
@@ -495,7 +506,7 @@ namespace ConwayGameOfLife
         /// </summary>
         internal void PaintForTest(int x, int y)
         {
-            if (backend == null || !IsInside(x, y))
+            if (backend == null || !editingEnabled || !IsInside(x, y))
                 return;
 
             paintValue = !IsAlive(x, y);

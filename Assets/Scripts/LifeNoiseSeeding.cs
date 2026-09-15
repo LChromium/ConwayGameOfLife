@@ -16,7 +16,7 @@ namespace ConwayGameOfLife
     /// The stage-B seeding parameters. Deliberately the whole set the brief allows --
     /// no noise editor, no per-octave controls.
     /// </summary>
-    public readonly struct LifeNoiseParameters
+    public readonly struct LifeNoiseParameters : IEquatable<LifeNoiseParameters>
     {
         public LifeSeedingMode Mode { get; }
 
@@ -65,6 +65,23 @@ namespace ConwayGameOfLife
         public override string ToString() =>
             $"{Mode} seed={Seed} density={Density:0.###} scale={Scale:0.##} " +
             $"warp={WarpStrength:0.##} cluster={ClusterStrength:0.###}";
+
+        /// <summary>
+        /// Value equality, so "is the candidate on screen still the one these controls
+        /// describe" is a cheap field comparison rather than reflection.
+        /// </summary>
+        public bool Equals(LifeNoiseParameters other) =>
+            Mode == other.Mode
+            && Seed == other.Seed
+            && Density.Equals(other.Density)
+            && Scale.Equals(other.Scale)
+            && WarpStrength.Equals(other.WarpStrength)
+            && ClusterStrength.Equals(other.ClusterStrength);
+
+        public override bool Equals(object obj) => obj is LifeNoiseParameters other && Equals(other);
+
+        public override int GetHashCode() => HashCode.Combine(
+            (int)Mode, Seed, Density, Scale, WarpStrength, ClusterStrength);
     }
 
     /// <summary>
