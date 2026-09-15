@@ -124,6 +124,10 @@ namespace ConwayGameOfLife.Tests
             yield return Settle();
 
             VisualElement root = GetRoot();
+            ShowPresetsTab(root);
+            SelectCpuBackend(root);
+            yield return null;
+
             List<Button> presets = FindByClass(root, "library").Query<Button>(className: "preset").ToList();
             Assert.AreEqual(LifePatterns.All.Length, presets.Count);
 
@@ -459,10 +463,14 @@ namespace ConwayGameOfLife.Tests
             yield return Settle();
 
             VisualElement root = GetRoot();
+            ShowPresetsTab(root);
+            SelectCpuBackend(root);
+            yield return null;
+
             ScrollView archive = FindByClass(root, "preset-scroll") as ScrollView;
             Assert.IsNotNull(archive, "missing the 'preset-scroll' ScrollView");
 
-            VisualElement boundary = FindByClass(root, "dropdown");
+            VisualElement boundary = root.Q<DropdownField>("boundary-field");
             Assert.IsNotNull(boundary, "missing the boundary-condition dropdown");
 
             // The viewport must sit entirely above the dropdown (panel space: y grows downward).
@@ -741,6 +749,32 @@ namespace ConwayGameOfLife.Tests
         private static int ParseReadout(Label label)
         {
             return int.TryParse(label.text, out int value) ? value : -1;
+        }
+
+        /// <summary>
+        /// Brings the specimen archive forward. The tool area has two pages now, and a
+        /// test that inspects the archive's geometry has to make sure it is the page on
+        /// screen: a hidden page lays out to zero height, which reads as a layout bug.
+        /// </summary>
+        private static void ShowPresetsTab(VisualElement root)
+        {
+            Button tab = root.Q<Button>("tool-tab-presets");
+            Assert.IsNotNull(tab, "missing the specimen tab");
+            Press(tab);
+        }
+
+        /// <summary>
+        /// Pins the evolution backend. Tests that read the population readout need the
+        /// CPU backend: stage A publishes no GPU population, so the readout is "—"
+        /// there. Relying on whichever backend a previous test happened to leave
+        /// selected made those tests pass or fail by execution order.
+        /// </summary>
+        private static void SelectCpuBackend(VisualElement root)
+        {
+            DropdownField field = root.Q<DropdownField>("backend-field");
+            Assert.IsNotNull(field, "missing the backend selector");
+            if (field.enabledSelf)
+                field.value = "CPU（参考实现）";
         }
 
         /// <summary>Reads the controller's private backend via reflection.</summary>

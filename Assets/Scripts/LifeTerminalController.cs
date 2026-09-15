@@ -294,6 +294,9 @@ namespace ConwayGameOfLife
                 previewMode = true;
             }
 
+            // Asking for a candidate is a seeding action, so bring its panel forward.
+            ShowToolPage(true);
+
             seedingDirty = false;
             Seeding.RequestCandidate();
             UpdateSeedingActions();
@@ -677,11 +680,30 @@ namespace ConwayGameOfLife
             workspace.Add(display);
 
             VisualElement library = Element("library");
-            library.Add(Label("样本档案", "section-title"));
-            library.Add(Label($"SPECIMEN ARCHIVE / {LifePatterns.All.Length:00} ENTRIES", "archive-note"));
+
+            // Two tool pages rather than one ever-growing column: the specimen
+            // archive and the seeding panel each want the whole column, and stacking
+            // them pushed the archive down to a few visible rows.
+            VisualElement tabs = Element("tool-tabs");
+            presetTabButton = Button("样本", () => ShowToolPage(false), "tool-tab");
+            presetTabButton.name = "tool-tab-presets";
+            seedingTabButton = Button("播种", () => ShowToolPage(true), "tool-tab");
+            seedingTabButton.name = "tool-tab-seeding";
+            tabs.Add(presetTabButton);
+            tabs.Add(seedingTabButton);
+            library.Add(tabs);
+
+            VisualElement presetsPage = Element("tool-page");
+            presetsPage.name = "tool-page-presets";
+            presetsPage.Add(Label("样本档案", "section-title"));
+            presetsPage.Add(Label($"SPECIMEN ARCHIVE / {LifePatterns.All.Length:00} ENTRIES", "archive-note"));
 
             // The archive is the only region that cannot shrink arbitrarily; scrolling it keeps
             // the machine inside the reference height so the controls are never clipped.
+            //
+            // It manages its own overflow and is NOT nested inside another scroll view:
+            // nesting changed its geometry enough that an entry could no longer be
+            // scrolled fully into view, which is exactly what the archive test checks.
             ScrollView archive = new(ScrollViewMode.Vertical) { verticalScrollerVisibility = ScrollerVisibility.Auto };
             archive.AddToClassList("preset-scroll");
             presetButtons = new Button[LifePatterns.All.Length];
@@ -696,10 +718,27 @@ namespace ConwayGameOfLife
                 presetButtons[i] = button;
             }
 
-            library.Add(archive);
+            presetsPage.Add(archive);
+            library.Add(presetsPage);
+            presetPage = presetsPage;
+
+            // The seeding panel is the one that needs a scroll region of its own: in
+            // the stacked layout it wraps onto several rows.
+            ScrollView seedingScroll = new(ScrollViewMode.Vertical)
+            {
+                verticalScrollerVisibility = ScrollerVisibility.Auto,
+            };
+            seedingScroll.name = "tool-page-seeding";
+            seedingScroll.AddToClassList("tool-page");
+            BuildSeedingPanel(seedingScroll);
+            library.Add(seedingScroll);
+            seedingPage = seedingScroll;
+
+            ShowToolPage(false);
 
             library.Add(Label("边界条件", "field-label"));
             DropdownField boundary = new(new List<string> { "固定边界", "环绕边界" }, "固定边界");
+            boundary.name = "boundary-field";
             boundary.AddToClassList("dropdown");
             boundary.RegisterValueChangedCallback(evt =>
             {
@@ -727,8 +766,6 @@ namespace ConwayGameOfLife
                 SwitchBackend(evt.newValue == backendChoices[0]);
             });
             library.Add(backendField);
-
-            BuildSeedingPanel(library);
 
             workspace.Add(library);
             machine.Add(workspace);
@@ -792,6 +829,26 @@ namespace ConwayGameOfLife
         }
 
         // -- stage B seeding panel ---------------------------------------------
+
+        /// <summary>
+        /// Shows one tool page and marks its tab. Both pages stay in the tree; the
+        /// inactive one is hidden, so switching costs nothing and keeps its state.
+        /// </summary>
+        private void ShowToolPage(bool seeding)
+        {
+            if (presetPage == null || seedingPage == null)
+                return;
+
+            presetPage.style.display = seeding ? DisplayStyle.None : DisplayStyle.Flex;
+            seedingPage.style.display = seeding ? DisplayStyle.Flex : DisplayStyle.None;
+            presetTabButton.EnableInClassList("tool-tab-active", !seeding);
+            seedingTabButton.EnableInClassList("tool-tab-active", seeding);
+        }
+
+        private VisualElement presetPage;
+        private VisualElement seedingPage;
+        private Button presetTabButton;
+        private Button seedingTabButton;
 
         /// <summary>
         /// Five parameters and three actions, nothing more. Every row here is height

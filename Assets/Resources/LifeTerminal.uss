@@ -66,6 +66,34 @@
 .section-title { font-size: 14px; flex-shrink: 0; margin-bottom: 4px; }
 .archive-note { color: rgb(51, 70, 61); flex-shrink: 0; margin-bottom: 8px; }
 
+/* The tool area is two pages behind a tab strip rather than one ever-growing
+   column. Stacking the archive and the seeding panel in the same 236-unit column
+   left the archive showing three of eight specimens, and in the stacked layout the
+   combined content overflowed the machine and overlapped the board. */
+.tool-tabs { flex-direction: row; flex-shrink: 0; margin-bottom: 6px; }
+.tool-tab {
+    flex-grow: 1;
+    height: 26px;
+    margin: 0 4px 0 0;
+    font-size: 11px;
+    background-color: rgb(62, 74, 70);
+    color: rgb(200, 205, 185);
+    border-width: 1px 1px 3px 1px;
+    border-color: rgb(120, 130, 120) rgb(120, 130, 120) rgb(48, 56, 53) rgb(120, 130, 120);
+    border-radius: 3px;
+}
+.tool-tab:hover { background-color: rgb(78, 92, 87); }
+.tool-tab-active {
+    background-color: rgb(195, 189, 150);
+    color: rgb(43, 58, 48);
+    border-color: rgb(225, 217, 177) rgb(225, 217, 177) rgb(125, 129, 106) rgb(225, 217, 177);
+}
+
+/* Both pages are direct children of the column and take the space between the tab
+   strip and the shared boundary/backend controls. The archive manages its own
+   overflow; the seeding page scrolls because in the stacked layout it wraps. */
+.tool-page { flex-grow: 1; flex-shrink: 1; min-height: 96px; flex-direction: column; }
+
 /* The archive is the one region that may not fit on a short window. Rather than letting it push
    the machine past the reference height (which clipped the controls at 1280x720), it scrolls. */
 .preset-scroll {
@@ -194,7 +222,16 @@
    tall empty band. */
 .compact .life-grid { flex-grow: 0; min-height: 300px; }
 
-.compact .library { width: auto; flex-grow: 1; flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+/* Kept at flex-grow 0 deliberately. Letting the library grow in the stacked layout
+   made it start higher than the display's own height, and the archive title landed
+   on top of the readouts. A little unused space at the bottom is the honest price
+   of the two regions never overlapping. */
+.compact .library { width: auto; flex-grow: 0; flex-direction: column; }
+
+/* In the stacked layout the tool pages take a full row, so the seeding controls
+   flow horizontally instead of stacking in a narrow column. */
+.compact .tool-page { width: 100%; max-height: 320px; }
+.compact .tool-page-seeding { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
 
 /* The controls row is a single unwrapped flex row of fixed-width buttons. In a narrow panel it
    ran off the right edge and clipped "清空" entirely (visible in the 600x1000 capture). It must

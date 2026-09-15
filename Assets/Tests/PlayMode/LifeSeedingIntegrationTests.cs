@@ -598,6 +598,70 @@ namespace ConwayGameOfLife.Tests
 
         // -- helpers -------------------------------------------------------------
 
+        [UnityTest]
+        public IEnumerator ToolTabs_SwitchBetweenTheArchiveAndTheSeedingPanel()
+        {
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            Button presetsTab = root.Q<Button>("tool-tab-presets");
+            Button seedingTab = root.Q<Button>("tool-tab-seeding");
+            VisualElement presetsPage = root.Q<VisualElement>("tool-page-presets");
+            VisualElement seedingPage = root.Q<VisualElement>("tool-page-seeding");
+
+            Assert.IsNotNull(presetsTab, "missing the specimen tab");
+            Assert.IsNotNull(seedingTab, "missing the seeding tab");
+            Assert.IsNotNull(presetsPage, "missing the specimen page");
+            Assert.IsNotNull(seedingPage, "missing the seeding page");
+
+            // Start from a known page: an earlier test may have brought the seeding
+            // panel forward, and this test is about the switch, not about the default.
+            Press(presetsTab);
+            yield return null;
+
+            Assert.AreEqual(DisplayStyle.Flex, presetsPage.resolvedStyle.display,
+                "pressing the specimen tab should show the archive");
+            Assert.AreEqual(DisplayStyle.None, seedingPage.resolvedStyle.display);
+
+            Press(seedingTab);
+            yield return null;
+
+            Assert.AreEqual(DisplayStyle.None, presetsPage.resolvedStyle.display,
+                "only one tool page may be visible at a time");
+            Assert.AreEqual(DisplayStyle.Flex, seedingPage.resolvedStyle.display);
+
+            Press(presetsTab);
+            yield return null;
+
+            Assert.AreEqual(DisplayStyle.Flex, presetsPage.resolvedStyle.display);
+            Assert.AreEqual(DisplayStyle.None, seedingPage.resolvedStyle.display);
+        }
+
+        [UnityTest]
+        public IEnumerator PreviewingABringsTheSeedingPanelForward()
+        {
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            LifeTerminalController controller = Controller();
+
+            // Start from the archive page rather than assuming it: an earlier test may
+            // have left the seeding panel showing.
+            Press(root.Q<Button>("tool-tab-presets"));
+            yield return null;
+
+            Assert.AreEqual(DisplayStyle.None, root.Q<VisualElement>("tool-page-seeding").resolvedStyle.display);
+
+            controller.Seeding.SetParameters(
+                new LifeNoiseParameters(LifeSeedingMode.Fbm, 4321, 0.32f, 24f, 5f, 0.7f));
+            controller.PreviewSeeding();
+            yield return null;
+
+            Assert.AreEqual(DisplayStyle.Flex,
+                root.Q<VisualElement>("tool-page-seeding").resolvedStyle.display,
+                "asking for a candidate should bring its panel forward");
+        }
+
         private static string ReadCaption(VisualElement root)
         {
             foreach (VisualElement element in root.Query<VisualElement>(className: "micro").ToList())
