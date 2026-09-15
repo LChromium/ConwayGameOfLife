@@ -727,6 +727,7 @@ namespace ConwayGameOfLife
             ScrollView seedingScroll = new(ScrollViewMode.Vertical)
             {
                 verticalScrollerVisibility = ScrollerVisibility.Auto,
+                horizontalScrollerVisibility = ScrollerVisibility.Hidden,
             };
             seedingScroll.name = "tool-page-seeding";
             seedingScroll.AddToClassList("tool-page");
