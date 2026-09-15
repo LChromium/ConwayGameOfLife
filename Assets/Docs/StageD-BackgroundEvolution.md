@@ -20,6 +20,8 @@ CPU 规则参考实现 [`LifeSimulation`](../Scripts/LifeSimulation.cs) **一行
 | 2 | **[P1] 异常路径没有复用请求身份，错误状态也无法正常恢复** | 失败与成功**同一套身份规则**：只有 `version == sessionVersion && !disposed` 的失败被记录，旧失败只回收缓冲；失败一律置 `resyncRequired`（模拟可能已经推进）；控制器收到当前失败即**停止自动提交**、显示停在最后一个完整世代、读数「演算失败」；只有显式动作（运行 / 单步 / 换盘）清除失败并安全重建；新增删除/清除路径（`ClearFailure`）。新增三条故障注入测试 |
 | 3 | **[P2]「上传就是最差帧来源」归因过强** | §4.1/§5 改为：上传是**已测得的显著阻塞来源**（50–56 ms），与最差帧（63–72 ms）同量级、时间上相容，但**本轮没有证明它解释了最差帧的全部耗时**；并写明 §4.2 那 0.95 ms 是**重建前复制**，不是每代接管成本（接管交换引用） |
 | 4 | **文档口径与旧微基准** | 开头的「相差 ≤4%」改为「同量级，−12%~+10%」；删掉「交接复制只有两个尺寸有值」等过时限制；**删除**已失去原用途的 `MicroBenchmark_StepCostInsideTheEditorRuntime`（在后台 CPU 上它测的是提交而不是步进），并把引用它的历史文档标为「历史记录、不再可复现」（TechnicalAnalysis §5.3、StageArchive §3） |
+| 5 | **[P2] 失败可能在「检查错误」与「提交下一步」之间被自动清掉**（后台线程在两步之间失败 → 控制器发现空闲 → 提交被接受并清空错误 → 用户没重试，系统却自行重试，且错误从未显示） | **失败状态下的提交在同一个锁内被拒绝**（`Step()`），并单独计数 `RefusedWhileFailed`；只有 `ClearFailure()`（显式重试）或换盘能解除。控制器那侧只留作读数便利，**不再是保证**。回归测试不依赖线程时序：制造当前失败后**直接调用 `Step()`**，断言没有新任务、错误保留、计数 +1；显式清除后才允许提交并重建 |
+| 6 | **[P2] CPU 失败后切到 GPU，界面仍显示「演算失败」**（镜像只靠异步后端同步更新，而 `PumpEvolution` 遇到 GPU 直接返回） | 抽取 `SyncEvolutionFailure()`：**从当前后端**读取错误状态；`PumpEvolution` 对**任何**后端都先调用它，`SwitchBackend` 再在**同一次调用内**同步一次（不留一帧窗口）。新增真实控件测试：CPU 失败 → 切 GPU（**同一帧**断言读数与 tooltip 已不带旧错误）→ 单步正常 → 切回 CPU 按其当前状态显示 |
 
 ---
 
@@ -115,10 +117,12 @@ worker 抛异常时（注入的失败、OOM、任何 `Compute` 内的异常）�
 |---|---|
 | **先回收**：`computing = false`、结果缓冲归还、**`resyncRequired = true`** | 异常可能发生在模拟**已经推进之后**，worker 的状态可能已经领先于显示；重试必须从显示棋盘重建 |
 | **只有当前会话的失败才记录**：`version == sessionVersion && !disposed` | 与成功结果同一条身份规则：为已经被换掉的棋盘抛出的失败只回收资源，**不污染当前会话** |
+| **失败期间 `Step()` 在同一个锁内拒绝提交**（计 `RefusedWhileFailed`） | 这一条是**保证**，不是调用方的判断：worker 在另一条线程上，可以在调用方「有没有错？」与「提交下一个」之间失败；那个窗口里被接受的提交会清掉用户还没看到的错误，于是系统自己重试了自己。只有 `ClearFailure()`（显式重试）或换盘能解除 |
 | 控制器：当前失败 → **停止自动提交**（`Stop()`）、显示保持**最后一个完整世代**、读数显示「演算失败」+ tooltip 给出原因 | 失败的流水线不能再自己往下提交；界面也不该装作只是慢 |
 | 恢复只能由**显式动作**触发：按下「运行」、按「单步」、或换盘（载入/清空/编辑/切后端） | 后端在这三类动作里清掉失败；换盘另在 `MoveBoardLocked` 里清 |
 | 下一次提交**必然重建**（`resyncRequired` 已置位），并且 `LifeStepOutcome.BoardLoadMilliseconds > 0` 可作证据 | 重试不能从「可能已经超前的 worker 状态」继续 |
 | **不会自愈** | 失败一直显示到有人动手；一次失败不会被时间或下一帧悄悄抹掉 |
+| **界面错误属于当前后端**：`SyncEvolutionFailure()` 从**正在使用的**后端读状态，泵每帧调用一次，切后端时在同一次调用里再同步一次 | CPU 报了错、切到 GPU 之后，读数与 tooltip 不能还挂着 CPU 的错误；切回来也要按 CPU 的当前状态显示，而不是沿用旧镜像 |
 
 测试用的故障注入不是新框架：`LifeAsyncCpuBackend` 的规则步进与调度器一样是构造参数
 （`Action<LifeSimulation> stepRule`，默认 `LifeSimulation.Step`，与 `LifeSeedingSession`
@@ -126,7 +130,7 @@ worker 抛异常时（注入的失败、OOM、任何 `Compute` 内的异常）�
 
 ---
 
-## 3. 可控任务验证（PlayMode，`LifeBackgroundEvolutionTests`，17 条）
+## 3. 可控任务验证（PlayMode，`LifeBackgroundEvolutionTests`，19 条）
 
 两类，刻意分开：
 
@@ -161,21 +165,32 @@ worker 抛异常时（注入的失败、OOM、任何 `Compute` 内的异常）�
 | 15 | `Failure_StopsTheClockAndKeepsTheLastCompleteGeneration` | 注入「先推进再抛异常」：失败被报告、时钟停止、显示保持最后完整世代、读数「演算失败」；20 帧内**不再有任何自动提交** |
 | 16 | `RetryAfterAFailure_RebuildsFromTheDisplayBoard_AndKeepsTheNumbering` | 按「运行」重试 → 失败被清除、读数恢复正常、**下一代从显示棋盘重建**（不是从失败任务已经超前的棋盘），与参考逐格一致 |
 | 17 | `StaleFailure_DoesNotPolluteTheReplacedBoard` | 换盘之后才落地的失败**不记录**、不发布、不阻塞流水线；下一次提交正常出代并与参考逐格一致 |
+| 18 | `FailedBackend_RefusesSubmissions_UntilSomethingExplicitlyClearsTheFailure` | **不依赖线程时序**：制造当前失败后直接调 `Step()` → 没有新任务、错误保留、`RefusedWhileFailed` +1 而 `RefusedSubmissions` 仍为 0；只有 `ClearFailure()` 之后才接受提交，且该次提交从显示棋盘重建、编号为 1 |
+| 19 | `CpuFailure_ThenSwitchingToGpu_ShowsTheGpuState_NotTheOldError` | 真实控件：CPU 失败（读数「演算失败」）→ 切到 GPU，**同一帧**断言读数与 tooltip 已不带旧错误、状态为「已暂停」→ 单步正常 → 切回 CPU 按其当前状态显示且可继续运行 |
 
 **证伪（每条只改一处，全部实测）。**
 
 1. **去掉接管时的版本与世代校验**（`TryAdoptCompletedGeneration` 里的那一个 `if`）：
-   17 条里 **5 条失败** —— 两条边界切换，以及 `ReplacedBoardRefusesTheOldResult_…`、
+   19 条里 **5 条失败** —— 两条边界切换，以及 `ReplacedBoardRefusesTheOldResult_…`、
    `ResetDuringCompute_…`、`SwitchingBackend_…`（陈旧结果被接管）。
 2. **让控制器在暂停时也接管**（`PumpEvolution` 的 `running || singleStepOutstanding` 改成恒真）：
-   17 条里 **2 条失败** —— `PauseDuringCompute_…`（「暂停中的时钟显示了一代它没有接管的棋盘」）
+   19 条里 **2 条失败** —— `PauseDuringCompute_…`（「暂停中的时钟显示了一代它没有接管的棋盘」）
    与 `SingleStep_TakesOverTheWaitingGeneration_…`。
 3. **拒绝之后不重建**（去掉 `WrapEdges` setter 与拒绝分支里的 `resyncRequired = true`）：
    **恰好两条边界切换测试失败**，报错为「the generation after the rebuild should be adopted」——
    正是评审指出的形状：worker 从自己那个（旧规则下、已经领先的）世代继续算，
    每个结果都因为「不是显示世代的下一代」被拒，**显示再也不前进**。
+4. **恢复「接受提交即清错」的旧行为**（失败状态下不再拒绝提交，并在接受时清 `failure`）：
+   `FailedBackend_RefusesSubmissions_…` 失败，报错为「a failed backend accepted a submission,
+   so the system retried itself」。
+5. **去掉切换后端时的错误同步**（`SwitchBackend` 里那一行 `SyncEvolutionFailure()`）：
+   `CpuFailure_ThenSwitchingToGpu_…` 失败，报错为「the readout still shows the CPU failure
+   after switching to the GPU: 演算失败」。
+   **这条第一次跑是绿的**：当时测试先 `yield return null` 再断言，下一帧的泵把镜像修好了，
+   一帧的窗口就被掩盖。改成**同一帧断言**（切换后不 yield 直接读读数与 tooltip）才抓住。
+   ——测试能失败才算证据，这一条的修正过程记在这里。
 
-三条都只动一处、都在 `tr-*.xml`（`.gitignore` 内）中留过现场；上面记录的是命令与观察到的输出。
+五条都只动一处、都在 `tr-*.xml`（`.gitignore` 内）中留过现场；上面记录的是命令与观察到的输出。
 
 ---
 

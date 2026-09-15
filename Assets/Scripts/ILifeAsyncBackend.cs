@@ -100,6 +100,15 @@ namespace ConwayGameOfLife
         /// </summary>
         int RefusedSubmissions { get; }
 
+        /// <summary>
+        /// Steps refused because the pipeline is in a failed state that nobody has cleared.
+        /// Refusing is what makes "a failure stops automatic submission" a property of the BACKEND
+        /// rather than of a caller's check: the worker can fail between a caller's test and its
+        /// submission, and a submission accepted in that window would clear an error the user has
+        /// not seen.
+        /// </summary>
+        int RefusedWhileFailed { get; }
+
         /// <summary>Compute cost of the most recently adopted generation, in milliseconds.</summary>
         double LastComputeMilliseconds { get; }
 
@@ -122,13 +131,20 @@ namespace ConwayGameOfLife
         /// identity rule a successful result follows. A failure also leaves the worker's state
         /// untrustworthy (the simulation may have advanced before it threw), so the next submission
         /// rebuilds from the displayed board.</para>
+        ///
+        /// <para>While this is non-null the backend REFUSES submissions -- see
+        /// <see cref="RefusedWhileFailed"/>. That refusal is the guarantee, not a caller's check:
+        /// it happens in the same lock that would accept the work, so a failure that lands between
+        /// a caller's test and its submission cannot be silently retried away.</para>
         /// </summary>
         string FailureMessage { get; }
 
         /// <summary>
-        /// Forgets a failure so the pipeline can be used again. Called by the explicit actions that
-        /// mean "try again" -- starting the clock, single-stepping, replacing the board -- and by
-        /// nothing else: the interface saying "演算失败" must stay true until somebody acts.
+        /// Forgets a failure so the pipeline can be used again. This and a command that replaces
+        /// the board are the ONLY things that lift a failed state; nothing clears it automatically.
+        /// The next submission rebuilds the worker's simulation from the displayed board (a failure
+        /// always leaves that required), so a retry never continues from a state that may already
+        /// be ahead.
         /// </summary>
         void ClearFailure();
     }

@@ -726,6 +726,11 @@ namespace ConwayGameOfLife
         /// </summary>
         private int PumpEvolution()
         {
+            // Before anything else, and for WHICHEVER backend is live: the interface's error state
+            // belongs to the backend in use. A GPU backend has no failure to report, so switching
+            // to it must clear a CPU error from the readout rather than leave it standing.
+            SyncEvolutionFailure();
+
             if (backend is not ILifeAsyncBackend asyncBackend)
                 return 0;
 
@@ -745,12 +750,10 @@ namespace ConwayGameOfLife
                     RefreshState();
             }
 
-            ReportAsyncFailure(asyncBackend);
-
             // The manual generation, issued only while the pipeline is free. Kept as a flag so a
-            // second press while one is in flight cannot queue a third generation -- and it is not
-            // re-issued while a failure stands: a failed pipeline must not keep submitting on its
-            // own, only an explicit action may start it again.
+            // second press while one is in flight cannot queue a third generation. The backend
+            // refuses work while it is failed (see ILifeAsyncBackend), so this check is a
+            // convenience for the readout, not the guarantee.
             if (!running && singleStepOutstanding && asyncFailureLogged == null &&
                 !asyncBackend.IsComputing && !asyncBackend.HasCompletedGeneration)
             {
@@ -761,23 +764,25 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Mirrors the backend's failure state, and acts on it.
+        /// Reads the error state from whichever backend is live NOW, and acts on it.
+        ///
+        /// <para>Called every frame by the pump and explicitly on every backend switch. The mirror
+        /// belongs to the backend in use: switching away from a failed CPU backend has to release
+        /// the readout (the GPU has no failure), and switching back has to describe the CPU's
+        /// current state rather than whatever was on screen before.</para>
         ///
         /// <para><b>A current failure stops the automatic submission.</b> The display keeps the
         /// last complete generation (nothing was adopted), the clock stops, and the readout says
-        /// 演算失败 instead of looking like a board that is merely slow. Nothing submits again
-        /// until an explicit action asks for it: starting the clock, a single step, or replacing
-        /// the board -- those clear the failure, and the backend rebuilds the worker from the
-        /// displayed board before computing anything, so a retry cannot continue from a state that
-        /// had already advanced when it threw.</para>
+        /// 演算失败 instead of looking like a board that is merely slow. The backend enforces this
+        /// itself by refusing submissions until somebody clears the failure, so no ordering between
+        /// this method and a submission can produce a self-retry.</para>
         ///
-        /// <para>A failure that belongs to a board which has since been replaced never reaches
-        /// here: the backend refuses it by session identity, exactly as it refuses a stale
-        /// success.</para>
+        /// <para>A failure that belongs to a board which has since been replaced never reaches here:
+        /// the backend refuses it by session identity, exactly as it refuses a stale success.</para>
         /// </summary>
-        private void ReportAsyncFailure(ILifeAsyncBackend asyncBackend)
+        private void SyncEvolutionFailure()
         {
-            string failure = asyncBackend.FailureMessage;
+            string failure = (backend as ILifeAsyncBackend)?.FailureMessage;
             if (string.Equals(failure, asyncFailureLogged))
                 return;
 
@@ -785,7 +790,8 @@ namespace ConwayGameOfLife
 
             if (failure == null)
             {
-                // Recovered: the retry was accepted, so the pipeline is usable again.
+                // Either nothing is wrong, or the retry was accepted: the readout goes back to
+                // describing the run.
                 RefreshState();
                 return;
             }
@@ -1435,6 +1441,12 @@ namespace ConwayGameOfLife
             useGpu = gpu;
             ApplyBackend();
             RestoreInitialState();
+
+            // The error mirror belongs to the backend in use. Re-read it from the one just switched
+            // to, in the same call: a CPU failure must not sit on the readout while the GPU runs,
+            // and switching back must describe the CPU's current state rather than the old mirror.
+            SyncEvolutionFailure();
+
             RefreshReadouts();
             RefreshState();
             UpdateSeedingActions();

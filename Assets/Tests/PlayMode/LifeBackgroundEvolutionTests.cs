@@ -878,6 +878,150 @@ namespace ConwayGameOfLife.Tests
             yield return null;
         }
 
+        /// <summary>
+        /// The guarantee that a failure cannot be retried away by accident, tested where it has to
+        /// hold: the backend itself, in the same lock that would accept the work.
+        ///
+        /// <para>The window this closes is not a controller bug that another controller check could
+        /// shrink: the worker runs on another thread and can fail between a caller's "is anything
+        /// wrong?" test and its "submit the next one" call. If the submission were accepted there,
+        /// it would clear a failure nobody has seen and the system would have retried itself.
+        /// Nothing but <see cref="LifeAsyncCpuBackend.ClearFailure"/> (an explicit retry) or a
+        /// command that replaces the board may lift the failed state.</para>
+        /// </summary>
+        [Test]
+        public void FailedBackend_RefusesSubmissions_UntilSomethingExplicitlyClearsTheFailure()
+        {
+            var scheduler = new ManualScheduler();
+            int calls = 0;
+            var backend = new LifeAsyncCpuBackend(8, 8, scheduler.Schedule, simulation =>
+            {
+                calls++;
+                if (calls == 1)
+                {
+                    simulation.Step();
+                    throw new InvalidOperationException("injected rule failure");
+                }
+
+                simulation.Step();
+            });
+
+            try
+            {
+                backend.WrapEdges = true;
+                backend.LoadBoard(EdgeBlinker());
+
+                backend.Step();
+                Assert.AreEqual(1, scheduler.SubmitCount, "the first submission should be accepted");
+                scheduler.RunPending();
+
+                Assert.IsNotNull(backend.FailureMessage, "the failure must be reported");
+                Assert.IsFalse(backend.IsComputing, "the worker released the pipeline when it failed");
+
+                // The window: a submission arriving after the failure, with nobody having retried.
+                int submissions = scheduler.SubmitCount;
+                backend.Step();
+
+                Assert.AreEqual(submissions, scheduler.SubmitCount,
+                    "a failed backend accepted a submission, so the system retried itself");
+                Assert.IsNotNull(backend.FailureMessage, "the refused submission cleared the failure");
+                Assert.AreEqual(1, backend.RefusedWhileFailed, "the refusal must be counted");
+                Assert.AreEqual(0, backend.RefusedSubmissions,
+                    "a failure refusal is not a 'busy' refusal and must not be counted as one");
+                Assert.AreEqual(0, backend.Generation, "nothing may be displayed by a failed pipeline");
+
+                // Only an explicit clear reopens it -- and the retry rebuilds from the display.
+                backend.ClearFailure();
+                Assert.IsNull(backend.FailureMessage, "ClearFailure must release the failed state");
+
+                backend.Step();
+                Assert.AreEqual(submissions + 1, scheduler.SubmitCount, "an explicit retry must be accepted");
+                scheduler.RunPending();
+
+                Assert.IsTrue(backend.TryAdoptCompletedGeneration(out LifeStepOutcome outcome),
+                    "the retry should produce an adoptable generation");
+                Assert.AreEqual(1, outcome.Generation, "the retry follows the displayed generation");
+                Assert.Greater(outcome.BoardLoadMilliseconds, 0.0,
+                    "the retry must rebuild from the displayed board, not continue from the failed state");
+            }
+            finally
+            {
+                backend.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// The interface error belongs to the backend in use. A CPU failure must not sit on the
+        /// readout while the GPU is the one running, and switching back must describe the CPU's
+        /// current state rather than reusing whatever was there before.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator CpuFailure_ThenSwitchingToGpu_ShowsTheGpuState_NotTheOldError()
+        {
+            LifeTerminalController controller = Controller();
+            DropdownField field = Root().Q<DropdownField>("backend-field");
+            Assert.IsNotNull(field, "missing the backend selector");
+            if (!field.enabledSelf)
+                Assert.Ignore("compute shaders unavailable on this machine; the switch was not exercised");
+
+            var scheduler = new ManualScheduler();
+            yield return InstallControllableBackend(scheduler, simulation =>
+            {
+                simulation.Step();
+                throw new InvalidOperationException("injected rule failure");
+            });
+
+            SetSpeed(controller, 20);
+            PressButton(RunButtonText);
+            yield return WaitFor(() => scheduler.HasPending, 30, "the clock to submit a generation");
+            scheduler.RunPending();
+            yield return WaitFor(() => injected.FailureMessage != null, 10, "the failure to be reported");
+
+            Label state = ReadField<Label>(controller, "stateLabel");
+            Assert.AreEqual("演算失败", state.text, "the CPU failure should be on the readout first");
+
+            // Switch to the GPU: the readout describes the backend that is now running, in the SAME
+            // frame as the switch. Waiting a frame first would let the pump repair the mirror and
+            // hide the one-frame window this test exists to close.
+            field.value = "GPU（Compute Shader）";
+
+            Assert.AreEqual("GPU", ReadBackend(controller).Name, "the selector did not switch to the GPU");
+            Assert.IsFalse(state.text.Contains("演算失败"),
+                $"the readout still shows the CPU failure after switching to the GPU: '{state.text}'");
+            Assert.AreEqual("已暂停", state.text, "the switched-to backend starts paused");
+            Assert.IsFalse((state.tooltip ?? string.Empty).Contains("injected"),
+                $"the tooltip still carries the CPU failure: '{state.tooltip}'");
+
+            yield return null;
+            Assert.IsFalse(state.text.Contains("演算失败"),
+                $"the readout shows the CPU failure while the GPU is running: '{state.text}'");
+
+            // And the GPU path really works.
+            PressButton(StepButtonText);
+            yield return WaitFor(() => ReadBackend(controller).Generation == 1, 40, "the GPU single step");
+            Assert.IsFalse(state.text.Contains("演算失败"),
+                $"the readout shows the CPU failure while the GPU is running: '{state.text}'");
+
+            // Back to the CPU: synced to ITS current state, again in the same frame.
+            field.value = "CPU（参考实现）";
+
+            Assert.AreSame(injected, ReadBackend(controller), "the switch did not return to the CPU backend");
+            Assert.IsFalse(state.text.Contains("演算失败"),
+                $"switching back reused the old mirror instead of reading the backend: '{state.text}'");
+            Assert.IsNull(injected.FailureMessage,
+                "replacing the board on the switch should have cleared the CPU failure");
+
+            yield return null;
+
+            // Which means the CPU path runs again without any further ceremony.
+            PressButton(RunButtonText);
+            yield return WaitFor(() => scheduler.HasPending, 30, "the CPU run to submit a generation");
+            Assert.IsFalse(state.text.Contains("演算失败"), "the recovered CPU run still shows a failure");
+
+            StopClock(controller);
+            yield return null;
+        }
+
         // -- a boundary change is a rule change: refuse, then rebuild -----------
 
         /// <summary>

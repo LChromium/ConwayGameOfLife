@@ -94,6 +94,7 @@ namespace ConwayGameOfLife
         private int adoptedGenerations;
         private int refusedGenerations;
         private int refusedSubmissions;
+        private int refusedWhileFailed;
         private double lastComputeMilliseconds;
         private double lastResultCopyMilliseconds;
         private double lastResyncCopyMilliseconds;
@@ -296,6 +297,20 @@ namespace ConwayGameOfLife
                     return;
                 }
 
+                // A failed pipeline refuses work HERE, in the same lock that would accept it.
+                //
+                // This is deliberately not left to the caller's own check: the worker can fail
+                // between a caller's "is anything wrong?" test and its "submit the next one" call
+                // -- it is another thread -- and a submission accepted in that window would clear
+                // the failure the user has not seen yet, so the system would retry itself. Nothing
+                // lifts the failed state except ClearFailure() (an explicit retry) or a command
+                // that replaces the board (MoveBoardLocked).
+                if (failure != null)
+                {
+                    refusedWhileFailed++;
+                    return;
+                }
+
                 version = sessionVersion;
                 wrap = wrapEdges;
                 baseGeneration = displayGeneration;
@@ -304,13 +319,6 @@ namespace ConwayGameOfLife
                 rebuild = resyncRequired;
                 resyncRequired = false;
                 computing = true;
-
-                // A submission that is actually accepted IS the retry: the failure it replaces has
-                // been acted on. Clearing it here rather than on a timer keeps "the interface says
-                // 演算失败" true for exactly as long as nothing has been tried again, and it cannot
-                // hide a failure nobody has seen, because a failed submission cannot be followed by
-                // another one until the caller asks again.
-                failure = null;
             }
 
             if (rebuild)
@@ -496,6 +504,13 @@ namespace ConwayGameOfLife
         public int AdoptedGenerations => adoptedGenerations;
         public int RefusedGenerations => refusedGenerations;
         public int RefusedSubmissions => refusedSubmissions;
+
+        /// <summary>
+        /// Steps refused because the pipeline had failed and nobody had cleared it yet. Counted
+        /// separately from <see cref="RefusedSubmissions"/>: "busy" and "broken" are different
+        /// answers, and a caller that keeps asking a failed backend should be visible as such.
+        /// </summary>
+        public int RefusedWhileFailed => refusedWhileFailed;
         public double LastComputeMilliseconds => lastComputeMilliseconds;
         public double LastResultCopyMilliseconds => lastResultCopyMilliseconds;
 
