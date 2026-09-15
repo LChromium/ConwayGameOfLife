@@ -227,9 +227,9 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 .verify/                            # 独立校验工具（不属于 Unity 工程）
 ```
 
-> 阶段 C 的基准原始记录在仓库根目录：`stage-c-bench-r2.jsonl`（当前，6 条：帧时间构建 ×4 尺寸、
-> 发布构建 ×2 尺寸）与 `stage-c-bench.jsonl`（第一轮 10 条，**原样保留**；其中若干解释因超出
-> 测量证据被修正，逐条列在文档 §0）。每条记录自带 `recordRound` / `buildGuid` / `dataPath`
+> 阶段 C 的基准原始记录在仓库根目录：`stage-c-bench-r3.jsonl`（当前）、
+> `stage-c-bench-r2.jsonl` 与 `stage-c-bench.jsonl`（前两轮，**原样保留**；
+> 被修正的说法逐条列在文档 §0）。每条记录自带 `recordRound` / `buildGuid` / `dataPath`
 > 以及各字段自己的可用性说明，因此一个数字来自哪个配置、哪个场景不需要靠文件名猜。
 
 > `.verify/`、`test-results-*.xml` 与根目录的图表工件都不在 `Assets/` 下，
@@ -260,12 +260,13 @@ Tools/                              # 截图脚本（客户区抓图，DPI 感�
 > [`Assets/Docs/StageB-Seeding.md`](Assets/Docs/StageB-Seeding.md) §11。
 > 主体验收通过，范围已关闭，不再扩展。
 
-> **阶段 C 进行中**：先做**大棋盘基准**（256²/1024²/2048²/4096²），
-> 生成、上传、演化、显示、内存占用**五个口径分开记录**，
-> 见 [`Assets/Docs/StageC-Benchmark.md`](Assets/Docs/StageC-Benchmark.md) 与 `stage-c-bench-r2.jsonl`。
-> 两个关键数字：**4096² 的 fBm 生成约 8.9 秒**，**同尺寸下只有 1.67% 的盘面可见**。
-> 亚像素密度总览按评审意见**等出现真实显示问题再另行实施**；
-> GPU 独立生成噪声仍是**远期可选实验**；CPU 单生成器保留。
+> **阶段 C 进行中**：大棋盘基准（256²/1024²/2048²/4096²）把生成、上传、演化、显示、内存占用
+> **五个口径分开记录**，见 [`Assets/Docs/StageC-Benchmark.md`](Assets/Docs/StageC-Benchmark.md)
+> 与 `stage-c-bench-r3.jsonl`。两个关键数字：**4096² 的 fBm 生成约 8.9 秒**（同步生成函数耗时，
+> 不是端到端等待），**同尺寸下只有 1.67% 的盘面可见**。
+> **时钟过载保护已实现**（每帧推进上限＋步间预算，超限丢弃追赶欠账、不跳过演化步骤），
+> 界面区分目标与实际速率；追赶受控**不等于**单步不卡顿。
+> 亚像素密度总览按评审意见**暂缓**；GPU 独立生成噪声仍是**远期可选实验**；CPU 单生成器保留。
 
 ---
 

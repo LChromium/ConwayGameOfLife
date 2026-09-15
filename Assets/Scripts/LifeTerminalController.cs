@@ -78,6 +78,26 @@ namespace ConwayGameOfLife
         private float accumulator;
         private int geometryLogs;
 
+        // Clock overload protection. See Update for why there are two caps and what they mean.
+        private const int MaxGenerationsPerFrame = 4;
+        private const double GenerationBudgetMilliseconds = 6.0;
+        private const double RateWindowSeconds = 0.5;
+
+        private int rateWindowGenerations;
+        private double rateWindowSeconds;
+        private float achievedGenerationsPerSecond;
+        private bool clockOverloaded;
+
+        /// <summary>
+        /// Generations the backend actually retired per second, over the last half second.
+        /// With the clock capped this can sit below the slider's value, and the interface
+        /// says so rather than pretending the requested rate was achieved.
+        /// </summary>
+        public float AchievedGenerationsPerSecond => achievedGenerationsPerSecond;
+
+        /// <summary>True while the clock is discarding catch-up debt because it cannot keep up.</summary>
+        public bool ClockOverloaded => clockOverloaded;
+
         // Stage-B seeding controls.
         private DropdownField seedingModeField;
         private IntegerField seedField;
@@ -565,12 +585,58 @@ namespace ConwayGameOfLife
             accumulator += Time.unscaledDeltaTime;
             float interval = 1f / speedSlider.value;
 
+            // Catch-up is bounded on purpose, and the bound is what keeps a slow backend
+            // usable. Without it the failure is a cross-frame amplification, not a runaway
+            // inside one frame: the accumulator grows by one frame delta per frame, so a
+            // frame that took 650 ms (one CPU generation at 4096x4096) is followed by a
+            // frame that tries to retire 13 generations at 650 ms each, which makes the next
+            // delta larger still. Two caps, because they catch different shapes:
+            //
+            //   * MaxGenerationsPerFrame bounds a healthy-but-fast clock that simply owes
+            //     many generations;
+            //   * the time budget stops the loop as soon as this frame's stepping has already
+            //     cost more than a frame may, which is the case a slow backend actually hits.
+            //
+            // When either cap bites, the WHOLE generations of debt are discarded and the
+            // simulation is allowed to run slower than the slider asks. Steps are never
+            // skipped: every generation that happens is a real evolution of the real board,
+            // there are just fewer of them. What this does NOT do is make a single 650 ms
+            // synchronous step cheap -- a frame that contains one still takes 650 ms. That
+            // separation is the point: first stop the amplification, then decide whether
+            // CPU evolution needs to move off the main thread.
             bool advanced = false;
-            while (accumulator >= interval)
+            int stepped = 0;
+            var stepWatch = System.Diagnostics.Stopwatch.StartNew();
+
+            while (accumulator >= interval && stepped < MaxGenerationsPerFrame)
             {
                 accumulator -= interval;
                 backend.Step();
                 advanced = true;
+                stepped++;
+
+                if (stepWatch.Elapsed.TotalMilliseconds >= GenerationBudgetMilliseconds)
+                    break;
+            }
+
+            bool overloaded = false;
+            if (accumulator >= interval)
+            {
+                // Drop the whole generations of debt, keep the sub-interval remainder so the
+                // clock keeps its phase. The board is not fast-forwarded to "now"; it is
+                // simply behind, and the next frames advance it at whatever rate they can.
+                accumulator %= interval;
+                overloaded = true;
+            }
+
+            TrackAchievedRate(stepped);
+
+            if (overloaded != clockOverloaded)
+            {
+                // The readout has to say "slower than asked" as soon as the clock starts
+                // dropping debt, not half a second later when the rate window closes.
+                clockOverloaded = overloaded;
+                RefreshState();
             }
 
             // One repaint per frame, not one per generation: a fast clock can
@@ -581,6 +647,37 @@ namespace ConwayGameOfLife
                 RefreshReadouts();
                 grid.MarkBoardDirty();
             }
+        }
+
+        /// <summary>
+        /// Generations actually retired per second, over a short sliding window. The slider
+        /// says what was ASKED for; this says what the backend manages on this board, which
+        /// is the number that matters once the clock can be overloaded.
+        /// </summary>
+        private void TrackAchievedRate(int stepped)
+        {
+            rateWindowGenerations += stepped;
+            rateWindowSeconds += Time.unscaledDeltaTime;
+
+            if (rateWindowSeconds < RateWindowSeconds)
+                return;
+
+            achievedGenerationsPerSecond = (float)(rateWindowGenerations / rateWindowSeconds);
+            rateWindowGenerations = 0;
+            rateWindowSeconds = 0.0;
+            RefreshState();
+        }
+
+        /// <summary>
+        /// Forgets the clock's outstanding debt. Called wherever the board is replaced or the
+        /// clock is stopped: carrying debt across a reset or a pause would make the next frame
+        /// replay generations that belong to a board which no longer exists.
+        /// </summary>
+        private void ClearClockDebt()
+        {
+            accumulator = 0f;
+            rateWindowGenerations = 0;
+            rateWindowSeconds = 0.0;
         }
 
         /// <summary>
@@ -1140,6 +1237,10 @@ namespace ConwayGameOfLife
             if (running)
                 Stop();
 
+            // A backend switch changes how long a generation costs, so any debt the old
+            // backend accumulated says nothing about the new one.
+            ClearClockDebt();
+
             useGpu = gpu;
             ApplyBackend();
             RestoreInitialState();
@@ -1258,14 +1359,17 @@ namespace ConwayGameOfLife
                 return;
 
             running = !running;
-            accumulator = 0f;
+
+            // Starting fresh or stopping both drop any debt: a pause must not be followed by
+            // a burst of generations the clock owed before it was paused.
+            ClearClockDebt();
             RefreshState();
         }
 
         private void Stop()
         {
             running = false;
-            accumulator = 0f;
+            ClearClockDebt();
             RefreshState();
         }
 
@@ -1312,7 +1416,29 @@ namespace ConwayGameOfLife
         private void RefreshState()
         {
             playButton.text = running ? "Ⅱ 暂停" : "▶ 运行";
-            stateLabel.text = running ? "演算中" : "已暂停";
+
+            // Target and achieved are different numbers as soon as the clock can be
+            // overloaded, so the panel shows both instead of reporting the slider's value as
+            // if it were what the board is doing.
+            if (!running)
+            {
+                stateLabel.text = "已暂停";
+            }
+            else if (clockOverloaded || achievedGenerationsPerSecond + 0.5f < speedSlider.value)
+            {
+                stateLabel.text = $"演算中 · 实际 {achievedGenerationsPerSecond:0.#}/秒";
+            }
+            else
+            {
+                stateLabel.text = "演算中";
+            }
+
+            stateLabel.tooltip = running
+                ? $"目标 {speedSlider.value} 代/秒；实际 {achievedGenerationsPerSecond:0.#} 代/秒。" +
+                  (clockOverloaded
+                      ? "后端跟不上目标速率，时钟正在丢弃追赶欠账（不跳过任何演化步骤，只是变慢）。"
+                      : string.Empty)
+                : string.Empty;
 
             if (!gpuAvailable)
             {

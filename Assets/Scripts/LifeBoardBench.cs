@@ -52,7 +52,7 @@ namespace ConwayGameOfLife
     public sealed class LifeBoardBench : MonoBehaviour
     {
         /// <summary>Round of the measurement contract that produced a record.</summary>
-        private const int RecordRound = 2;
+        private const int RecordRound = 3;
 
         /// <summary>
         /// Board the stage-B reproduction command uses, so generation figures are comparable.
@@ -104,39 +104,9 @@ namespace ConwayGameOfLife
 
         // -- results carried to the writer -------------------------------------
 
-        private sealed class Stats
-        {
-            public double Median;
-            public double Min;
-            public double Max;
-            public int Count;
-            public double Mean;
-
-            public static Stats From(List<double> samples)
-            {
-                samples.Sort();
-                double total = 0.0;
-                foreach (double sample in samples)
-                    total += sample;
-
-                return new Stats
-                {
-                    Count = samples.Count,
-                    Median = samples[samples.Count / 2],
-                    Min = samples[0],
-                    Max = samples[samples.Count - 1],
-                    Mean = total / samples.Count,
-                };
-            }
-
-            public string Json() =>
-                $"\"samples\": {Count}, \"medianMs\": {F(Median)}, \"meanMs\": {F(Mean)}, " +
-                $"\"minMs\": {F(Min)}, \"maxMs\": {F(Max)}";
-        }
-
         private sealed class Generation
         {
-            public Stats Stats;
+            public LifeBenchStatistics.Summary Stats;
             public double RealisedDensity;
             public int Alive;
             public string Parameters;
@@ -176,6 +146,7 @@ namespace ConwayGameOfLife
             int height = active.Height;
             int cells = width * height;
             gridRef = grid;
+            controllerRef = controller;
             Debug.Log($"[stage-c-bench] {width}x{height} ({cells} cells), active backend {active.Name}");
 
             // The starting board for every measurement below is a plain fixed random one:
@@ -200,23 +171,23 @@ namespace ConwayGameOfLife
             Phase("generate-uniform", ref phaseStartedAt);
             yield return null;
 
-            Stats cpuLoad = MeasureUploadCpu(board, width, height);
+            LifeBenchStatistics.Summary cpuLoad = MeasureUploadCpu(board, width, height);
             Phase("upload-cpu", ref phaseStartedAt);
             yield return null;
 
-            Stats gpuLoad = MeasureUploadGpu(board, width, height);
+            LifeBenchStatistics.Summary gpuLoad = MeasureUploadGpu(board, width, height);
             Phase("upload-gpu", ref phaseStartedAt);
             yield return null;
 
-            Stats cpuRules = MeasureCpuRules(board, width, height, cells);
+            LifeBenchStatistics.Summary cpuRules = MeasureCpuRules(board, width, height, cells);
             Phase("evolution-cpu", ref phaseStartedAt);
             yield return null;
 
-            Stats gpuSubmit = MeasureGpuRules(board, width, height, cells, synchronise: false);
+            LifeBenchStatistics.Summary gpuSubmit = MeasureGpuRules(board, width, height, cells, synchronise: false);
             Phase("evolution-gpu-submit", ref phaseStartedAt);
             yield return null;
 
-            Stats gpuBatch = MeasureGpuRules(board, width, height, cells, synchronise: true);
+            LifeBenchStatistics.Summary gpuBatch = MeasureGpuRules(board, width, height, cells, synchronise: true);
             Phase("evolution-gpu-batch-readback", ref phaseStartedAt);
             yield return null;
 
@@ -266,17 +237,14 @@ namespace ConwayGameOfLife
             // 4. normal evolution on the CPU backend: the configuration where the display
             //    path has to copy and upload the whole board after every change.
             //
-            //    The requested rate is NOT 20 here, and that is a measurement decision, not
-            //    politeness. A CPU generation at 2048x2048 costs ~151 ms against a 50 ms clock
-            //    interval, so the controller's catch-up loop (Update: while accumulator >=
-            //    interval) adds generations faster than it can retire them: the debt grows
-            //    inside a single frame, the main thread never returns, and the player hangs.
-            //    That was observed twice (a 318 s crash and a 600 s timeout) before this line
-            //    existed, and no coroutine can cut it short because the main thread is inside
-            //    the loop. The scenario therefore asks for a rate the backend can sustain and
-            //    reports the rate it asked for.
-            int cpuRate = SustainableRate(cpuRules);
-            SetSpeed(controller, cpuRate);
+            //    This scenario now asks for the SLIDER MAXIMUM at every board size, including
+            //    the sizes where one CPU generation costs 150-650 ms against a 50 ms clock
+            //    interval. Round 2 had to ask for a reduced rate because the clock's catch-up
+            //    was unbounded and the player hung (a 318 s crash and a 600 s timeout). With
+            //    the overload cap in LifeTerminalController the request is safe to make, and
+            //    the record shows what actually happened: the controller's own achieved rate,
+            //    and whether it had to discard catch-up debt.
+            SetSpeed(controller, requestedGenerationsPerSecond);
             Phase("cpu-backend-switch-enter", ref phaseStartedAt);
             if (SwitchBackend(controller, gpu: false))
             {
@@ -292,8 +260,9 @@ namespace ConwayGameOfLife
                     yield return null;
                     Phase("cpu-backend-first-frame", ref phaseStartedAt);
 
-                    yield return MeasureScenario(scenarios, "running-cpu-backend", cpu, cells, cpuRate,
-                        Repaint.None, budgetSeconds: 2.0f, minGenerations: 1, captureFrameTimings: true);
+                    yield return MeasureScenario(scenarios, "running-cpu-backend", cpu, cells,
+                        requestedGenerationsPerSecond, Repaint.None, budgetSeconds: 2.0f,
+                        minGenerations: 1, captureFrameTimings: true);
                     Phase("scenario-running-cpu-backend", ref phaseStartedAt);
                     SetRunning(controller, false);
                 }
@@ -348,7 +317,7 @@ namespace ConwayGameOfLife
             int alive = LifeNoiseSeeding.CountAlive(destination);
             return new Generation
             {
-                Stats = Stats.From(samples),
+                Stats = LifeBenchStatistics.Summarise(samples),
                 Alive = alive,
                 RealisedDensity = (double)alive / destination.Length,
                 Parameters = parameters.ToString(),
@@ -357,18 +326,18 @@ namespace ConwayGameOfLife
 
         // -- 2. upload ---------------------------------------------------------
 
-        private static Stats MeasureUploadCpu(byte[] board, int width, int height)
+        private static LifeBenchStatistics.Summary MeasureUploadCpu(byte[] board, int width, int height)
         {
             using var backend = new CpuLifeBackend(width, height);
             return MeasureUpload(backend, board, repeats: 5);
         }
 
-        private static Stats MeasureUploadGpu(byte[] board, int width, int height)
+        private static LifeBenchStatistics.Summary MeasureUploadGpu(byte[] board, int width, int height)
         {
             if (!GpuLifeBackend.TryCreate(width, height, out GpuLifeBackend backend, out string error))
             {
                 Debug.LogWarning($"[stage-c-bench] GPU upload not measured: {error}");
-                return null;
+                return default;
             }
 
             using (backend)
@@ -377,7 +346,7 @@ namespace ConwayGameOfLife
             }
         }
 
-        private static Stats MeasureUpload(ILifeBackend backend, byte[] board, int repeats)
+        private static LifeBenchStatistics.Summary MeasureUpload(ILifeBackend backend, byte[] board, int repeats)
         {
             var samples = new List<double>(repeats);
             for (int i = 0; i < repeats; i++)
@@ -388,12 +357,12 @@ namespace ConwayGameOfLife
                 samples.Add(watch.Elapsed.TotalMilliseconds);
             }
 
-            return Stats.From(samples);
+            return LifeBenchStatistics.Summarise(samples);
         }
 
         // -- 3. evolution ------------------------------------------------------
 
-        private static Stats MeasureCpuRules(byte[] board, int width, int height, int cells)
+        private static LifeBenchStatistics.Summary MeasureCpuRules(byte[] board, int width, int height, int cells)
         {
             using var backend = new CpuLifeBackend(width, height);
             backend.WrapEdges = true;
@@ -414,7 +383,7 @@ namespace ConwayGameOfLife
                 samples.Add(watch.Elapsed.TotalMilliseconds / BatchSteps);
             }
 
-            return Stats.From(samples);
+            return LifeBenchStatistics.Summarise(samples);
         }
 
         /// <summary>
@@ -423,12 +392,12 @@ namespace ConwayGameOfLife
         /// by the batch size: an amortised figure, not a per-generation execution time, and
         /// the readback's share of it is not measured.
         /// </summary>
-        private static Stats MeasureGpuRules(byte[] board, int width, int height, int cells, bool synchronise)
+        private static LifeBenchStatistics.Summary MeasureGpuRules(byte[] board, int width, int height, int cells, bool synchronise)
         {
             if (!GpuLifeBackend.TryCreate(width, height, out GpuLifeBackend backend, out string error))
             {
                 Debug.LogWarning($"[stage-c-bench] GPU evolution not measured: {error}");
-                return null;
+                return default;
             }
 
             using (backend)
@@ -459,7 +428,7 @@ namespace ConwayGameOfLife
                     samples.Add(watch.Elapsed.TotalMilliseconds / BatchSteps);
                 }
 
-                return Stats.From(samples);
+                return LifeBenchStatistics.Summarise(samples);
             }
         }
 
@@ -467,8 +436,8 @@ namespace ConwayGameOfLife
 
         private sealed class DisplayFacts
         {
-            public Stats Refresh;
-            public Stats CpuBoardCopyAndUpload;
+            public LifeBenchStatistics.Summary Refresh;
+            public LifeBenchStatistics.Summary CpuBoardCopyAndUpload;
             public int ViewportWidth;
             public int ViewportHeight;
             public int CellPixels;
@@ -499,7 +468,7 @@ namespace ConwayGameOfLife
                     samples.Add(watch.Elapsed.TotalMilliseconds);
                 }
 
-                facts.Refresh = Stats.From(samples);
+                facts.Refresh = LifeBenchStatistics.Summarise(samples);
                 facts.CellPixels = grid.CellPixels;
             }
 
@@ -554,7 +523,7 @@ namespace ConwayGameOfLife
                     samples.Add(watch.Elapsed.TotalMilliseconds);
                 }
 
-                facts.CpuBoardCopyAndUpload = Stats.From(samples);
+                facts.CpuBoardCopyAndUpload = LifeBenchStatistics.Summarise(samples);
             }
 
             return facts;
@@ -572,6 +541,7 @@ namespace ConwayGameOfLife
         }
 
         private LifeGridElement gridRef;
+        private LifeTerminalController controllerRef;
 
         private enum Repaint
         {
@@ -589,62 +559,44 @@ namespace ConwayGameOfLife
             public int RequestedGenerationsPerSecond;
             public int StartGeneration;
             public int GenerationsAdvanced;
-            public Stats Frames;
+            public LifeBenchStatistics.Summary Frames;
             public float FramesPerSecond;
             public float GenerationsPerSecond;
+            public float ControllerAchievedGenerationsPerSecond;
+            public bool ControllerOverloaded;
             public double FirstDecileFrameMedianMs;
             public double LastDecileFrameMedianMs;
+            public double? EdgeDecileRatio;
             public bool CutOffBySafetyCap;
-            public int FramesWithGridUpload;
-            public Stats GridReportedUploadMs;
-            public Stats GpuFrameMs;
-            public Stats CpuFrameMs;
-            public int RequestedFrameTimingFrames;
+            public int FramesWhereGridUploadCostWasNonZero;
+            public LifeBenchStatistics.Summary GridReportedUploadMs;
+
+            // Frame timings. Three different counts, because round 2 collapsed them into one
+            // and then called the number "requested frames":
+            //   * captureCalls -- how many times CaptureFrameTimings was called (once per frame
+            //     in the window, plus the discarded frame);
+            //   * returnCap -- the size of the array handed to GetLatestTimings, i.e. the
+            //     maximum number of records asked back;
+            //   * validReturned -- how many of those actually carried non-zero times.
+            // GetLatestTimings is called ONCE, at the end of the window, so what comes back is
+            // the most recent records available at that moment, NOT a uniform sample of the
+            // window. The record says so.
+            public int FrameTimingsCaptureCalls;
+            public int FrameTimingsReturnCap;
             public int ValidGpuFrameTimingSamples;
             public int ValidCpuFrameTimingSamples;
-            public string Note;
+            public LifeBenchStatistics.Summary GpuFrameMs;
+            public LifeBenchStatistics.Summary CpuFrameMs;
         }
 
         /// <summary>Frames sampled per scenario before the wall-clock budget can end it.</summary>
         private static int FrameSamplesFor(int cells) => cells <= 1 << 22 ? 120 : 40;
 
         /// <summary>
-        /// Hard ceiling on one scenario's wall clock. See the note in the sampling loop: it
-        /// cannot rescue a frame that never returns, only a scenario that keeps progressing.
+        /// Hard ceiling on one scenario's wall clock. The clock is bounded now, so this is a
+        /// backstop rather than the thing that keeps the benchmark alive.
         /// </summary>
         private const float SafetyCapSeconds = 20f;
-
-        /// <summary>
-        /// Median of the first or last tenth of the samples, in time order (the samples list
-        /// is not sorted until <see cref="Stats.From"/> runs, which is why this is called
-        /// first). Shows whether an interval grew during the window.
-        /// </summary>
-        private static double DecileMedian(List<double> samples, bool fromEnd)
-        {
-            int slice = Math.Max(1, samples.Count / 10);
-            int start = fromEnd ? samples.Count - slice : 0;
-            var window = new List<double>(slice);
-            for (int i = start; i < start + slice && i < samples.Count; i++)
-                window.Add(samples[i]);
-
-            return Stats.From(window).Median;
-        }
-
-        /// <summary>
-        /// A generation rate the CPU backend can actually retire at this board size. The
-        /// controller's clock runs at the slider's rate and its catch-up loop adds generations
-        /// faster than a slow step can retire them, so asking for more than the backend can do
-        /// does not produce a slow frame rate -- it produces a frame that never ends.
-        /// </summary>
-        private static int SustainableRate(Stats cpuStepMs)
-        {
-            if (cpuStepMs == null || cpuStepMs.Median <= 0.0)
-                return 1;
-
-            // Half the theoretical maximum, so a step always finishes inside its interval.
-            int rate = (int)(1000.0 / (2.0 * cpuStepMs.Median));
-            return Math.Clamp(rate, 1, 20);
-        }
 
         /// <summary>
         /// Runs one scenario and samples everything about it in the same window: frame
@@ -686,27 +638,30 @@ namespace ConwayGameOfLife
                     gridRef?.MarkBoardDirty();
 
                 if (captureFrameTimings)
+                {
                     FrameTimingManager.CaptureFrameTimings();
+                    result.FrameTimingsCaptureCalls++;
+                }
 
                 yield return null;
 
                 samples.Add(Time.unscaledDeltaTime * 1000.0);
 
-                // The production path reports its own upload cost; zero means it did not
-                // upload on that frame (which is the normal case on the GPU backend).
+                // The production path reports its own upload cost. The counter is sticky, so
+                // this counts FRAMES whose reported cost was non-zero, which is not a count of
+                // uploads; the record labels it that way.
                 if (gridRef != null && gridRef.LastUploadMilliseconds > 0f)
                 {
-                    result.FramesWithGridUpload++;
+                    result.FramesWhereGridUploadCostWasNonZero++;
                     uploads.Add(gridRef.LastUploadMilliseconds);
                 }
 
                 bool windowOver = Time.realtimeSinceStartup - startedAt >= budgetSeconds && samples.Count >= 10;
                 bool enoughGenerations = backend.Generation - result.StartGeneration >= minGenerations;
 
-                // Safety cap. It bounds the SCENARIO, not the application: if a frame itself
-                // never returns (the catch-up spiral described in Run), no coroutine can cut
-                // it short. It is here so a slow-but-progressing scenario still terminates,
-                // and it says so in the record when it fires.
+                // Backstop on the scenario's wall clock. The clock itself is bounded now, so
+                // this only catches a scenario that keeps progressing without meeting its
+                // exit conditions.
                 bool cutOff = Time.realtimeSinceStartup - startedAt >= SafetyCapSeconds;
                 result.CutOffBySafetyCap = cutOff;
 
@@ -714,12 +669,13 @@ namespace ConwayGameOfLife
                     break;
             }
 
-            result.Frames = Stats.From(samples);
-
-            // Escalation evidence: if the interval grows from the start of the window to the
-            // end, the record shows it rather than hiding it behind one median.
-            result.FirstDecileFrameMedianMs = DecileMedian(samples, fromEnd: false);
-            result.LastDecileFrameMedianMs = DecileMedian(samples, fromEnd: true);
+            // Deciles first, from the list in TIME ORDER. Round 2 summarised (which sorted the
+            // list in place) and only then took the deciles, so those figures described the
+            // fastest and slowest tenth rather than the window's beginning and end.
+            result.FirstDecileFrameMedianMs = LifeBenchStatistics.EdgeDecileMedian(samples, fromEnd: false);
+            result.LastDecileFrameMedianMs = LifeBenchStatistics.EdgeDecileMedian(samples, fromEnd: true);
+            result.EdgeDecileRatio = LifeBenchStatistics.EdgeDecileRatio(samples);
+            result.Frames = LifeBenchStatistics.Summarise(samples);
             result.GenerationsAdvanced = backend.Generation - result.StartGeneration;
 
             double elapsed = Time.realtimeSinceStartup - startedAt;
@@ -728,12 +684,20 @@ namespace ConwayGameOfLife
                 ? (float)(result.GenerationsAdvanced / elapsed)
                 : 0f;
 
+            // What the controller itself says it achieved, and whether it had to drop
+            // catch-up debt. This is the number the interface shows; it is recorded next to
+            // the benchmark's own count so the two can be compared.
+            result.ControllerAchievedGenerationsPerSecond = controllerRef != null
+                ? controllerRef.AchievedGenerationsPerSecond
+                : 0f;
+            result.ControllerOverloaded = controllerRef != null && controllerRef.ClockOverloaded;
+
             if (uploads.Count > 0)
-                result.GridReportedUploadMs = Stats.From(uploads);
+                result.GridReportedUploadMs = LifeBenchStatistics.Summarise(uploads);
 
             if (captureFrameTimings)
             {
-                result.RequestedFrameTimingFrames = timings.Length;
+                result.FrameTimingsReturnCap = timings.Length;
                 uint captured = FrameTimingManager.GetLatestTimings((uint)timings.Length, timings);
                 var cpu = new List<double>();
                 var gpu = new List<double>();
@@ -747,10 +711,10 @@ namespace ConwayGameOfLife
                 }
 
                 if (cpu.Count > 0)
-                    result.CpuFrameMs = Stats.From(cpu);
+                    result.CpuFrameMs = LifeBenchStatistics.Summarise(cpu);
 
                 if (gpu.Count > 0)
-                    result.GpuFrameMs = Stats.From(gpu);
+                    result.GpuFrameMs = LifeBenchStatistics.Summarise(gpu);
 
                 result.ValidCpuFrameTimingSamples = cpu.Count;
                 result.ValidGpuFrameTimingSamples = gpu.Count;
@@ -759,9 +723,15 @@ namespace ConwayGameOfLife
 
             results.Add(result);
             Debug.Log($"[stage-c-bench] scenario {name}: {samples.Count} frames, " +
-                      $"{result.GenerationsAdvanced} generations, median {result.Frames.Median:F3} ms, " +
-                      $"max {result.Frames.Max:F3} ms, uploads observed {result.FramesWithGridUpload}, " +
-                      $"gpu timing samples {result.ValidGpuFrameTimingSamples}/{result.RequestedFrameTimingFrames}");
+                      $"{result.GenerationsAdvanced} generations, median {result.Frames.MedianMs:F3} ms, " +
+                      $"max {result.Frames.MaxMs:F3} ms, first/last decile " +
+                      $"{result.FirstDecileFrameMedianMs:F3}/{result.LastDecileFrameMedianMs:F3} ms, " +
+                      $"controller rate {result.ControllerAchievedGenerationsPerSecond:F1}/s " +
+                      $"overloaded={result.ControllerOverloaded}, " +
+                      $"frames with non-zero upload cost {result.FramesWhereGridUploadCostWasNonZero}, " +
+                      $"frame timings captured {result.FrameTimingsCaptureCalls}x, returned " +
+                      $"{result.ValidGpuFrameTimingSamples} gpu / {result.ValidCpuFrameTimingSamples} cpu " +
+                      $"of cap {result.FrameTimingsReturnCap}");
         }
 
         /// <summary>
@@ -936,8 +906,8 @@ namespace ConwayGameOfLife
         // -- output ------------------------------------------------------------
 
         private void WriteLine(int width, int height, int cells, string backendName,
-            string boardIdentifiedAs, Generation fbm, Generation uniform, Stats cpuLoad, Stats gpuLoad,
-            Stats cpuRules, Stats gpuSubmit, Stats gpuBatch, DisplayFacts display,
+            string boardIdentifiedAs, Generation fbm, Generation uniform, LifeBenchStatistics.Summary cpuLoad, LifeBenchStatistics.Summary gpuLoad,
+            LifeBenchStatistics.Summary cpuRules, LifeBenchStatistics.Summary gpuSubmit, LifeBenchStatistics.Summary gpuBatch, DisplayFacts display,
             List<ScenarioResult> scenarios, MemoryFacts memory, int configuredVSync,
             int configuredTargetFrameRate, bool focusedThroughout, double elapsedSeconds)
         {
@@ -1059,7 +1029,7 @@ namespace ConwayGameOfLife
             json.Append('}');
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string path = Path.Combine(projectRoot, "stage-c-bench-r2.jsonl");
+            string path = Path.Combine(projectRoot, "stage-c-bench-r3.jsonl");
             File.AppendAllText(path, json + Environment.NewLine);
             Debug.Log($"[stage-c-bench] appended {width}x{height} ({backendName}) to {path}");
             Debug.Log($"[stage-c-bench] {json}");
@@ -1077,18 +1047,23 @@ namespace ConwayGameOfLife
             json.Append($"\"generationsAdvanced\": {scenario.GenerationsAdvanced}, ");
             json.Append($"\"requestedGenerationsPerSecond\": {scenario.RequestedGenerationsPerSecond}, ");
             json.Append($"\"achievedGenerationsPerSecond\": {F(scenario.GenerationsPerSecond)}, ");
+            json.Append($"\"controllerReportedGenerationsPerSecond\": {F(scenario.ControllerAchievedGenerationsPerSecond)}, ");
+            json.Append($"\"controllerClockOverloaded\": {Bool(scenario.ControllerOverloaded)}, ");
             json.Append($"\"frames\": {StatsOrNull(scenario.Frames)}, ");
             json.Append($"\"framesPerSecond\": {F(scenario.FramesPerSecond)}, ");
             json.Append($"\"firstDecileFrameMedianMs\": {F(scenario.FirstDecileFrameMedianMs)}, ");
             json.Append($"\"lastDecileFrameMedianMs\": {F(scenario.LastDecileFrameMedianMs)}, ");
+            json.Append($"\"lastOverFirstDecileRatio\": {LifeBenchStatistics.Format(scenario.EdgeDecileRatio)}, ");
             json.Append($"\"cutOffBySafetyCap\": {Bool(scenario.CutOffBySafetyCap)}, ");
-            json.Append($"\"framesWhereGridUploadCostWasNonZero\": {scenario.FramesWithGridUpload}, ");
+            json.Append($"\"framesWhereGridUploadCostWasNonZero\": {scenario.FramesWhereGridUploadCostWasNonZero}, ");
             json.Append($"\"gridReportedUploadMs\": {StatsOrNull(scenario.GridReportedUploadMs)}, ");
             json.Append($"\"gpuFrameTimeMs\": {StatsOrNull(scenario.GpuFrameMs)}, ");
             json.Append($"\"cpuFrameTimeMs\": {StatsOrNull(scenario.CpuFrameMs)}, ");
-            json.Append($"\"frameTimingRequestedFrames\": {scenario.RequestedFrameTimingFrames}, ");
+            json.Append($"\"frameTimingsCaptureCalls\": {scenario.FrameTimingsCaptureCalls}, ");
+            json.Append($"\"frameTimingsRequestedReturnCap\": {scenario.FrameTimingsReturnCap}, ");
             json.Append($"\"validGpuFrameTimingSamples\": {scenario.ValidGpuFrameTimingSamples}, ");
             json.Append($"\"validCpuFrameTimingSamples\": {scenario.ValidCpuFrameTimingSamples}, ");
+            json.Append("\"frameTimingsScope\": \"capture was called once per frame for the whole window, but GetLatestTimings was called ONCE at the end, so what is reported is the most recent records available at that moment -- not a uniform sample of the window and not 'the number of frames requested'\", ");
             json.Append("\"gridUploadCounterNote\": \"LifeGridElement.LastUploadMilliseconds is sticky: it keeps its last value until another upload overwrites it or a path resets it to zero. The count above therefore counts FRAMES whose reported cost was non-zero, not uploads; the distribution of values is what carries information\"");
             json.Append('}');
             return json.ToString();
@@ -1115,12 +1090,12 @@ namespace ConwayGameOfLife
                 : $"{{{generation.Stats.Json()}, \"realisedDensity\": {F(generation.RealisedDensity)}, " +
                   $"\"alive\": {generation.Alive}, \"parameters\": \"{generation.Parameters}\"}}";
 
-        private static string StatsOrNull(Stats stats) =>
-            stats == null ? "null" : "{" + stats.Json() + "}";
+        private static string StatsOrNull(LifeBenchStatistics.Summary stats) =>
+            LifeBenchStatistics.SummaryOrNull(stats);
 
-        private static string CellsPerSecond(Stats stats, long cells) =>
-            stats == null || stats.Median <= 0.0
+        private static string CellsPerSecond(LifeBenchStatistics.Summary stats, long cells) =>
+            stats.Count == 0 || stats.MedianMs <= 0.0
                 ? "null"
-                : F(cells / (stats.Median / 1000.0));
+                : F(cells / (stats.MedianMs / 1000.0));
     }
 }

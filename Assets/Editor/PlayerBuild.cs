@@ -81,7 +81,8 @@ namespace ConwayGameOfLife.EditorTools
                 Debug.Log($"[PlayerBuild] result={summary.result} " +
                           $"size={summary.totalSize} bytes " +
                           $"errors={summary.totalErrors} warnings={summary.totalWarnings} " +
-                          $"options={options} output={outputPath}");
+                          $"requestedOptions={options} reportOptions={summary.options} " +
+                          $"output={outputPath}");
 
                 if (summary.result != BuildResult.Succeeded)
                 {
