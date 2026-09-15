@@ -62,7 +62,11 @@
 .readout-value { color: rgb(221, 209, 162); font-size: 24px; margin-top: 6px; }
 .readout-value-compact { color: rgb(221, 209, 162); font-size: 16px; margin-top: 10px; }
 
-.library { width: 236px; flex-shrink: 0; color: rgb(34, 47, 42); }
+/* 280 rather than 236: the backend selector has to show "GPU（Compute Shader）", which measures
+   165 units of text. The popup spends 82 of its width on the arrow and padding, so a 236-unit
+   column left the text box at 154 and the name was cut to "GPU（Compute Shade" in the capture.
+   The 44 units come out of the display, which is still 1188 units wide for a 256-cell board. */
+.library { width: 280px; flex-shrink: 0; color: rgb(34, 47, 42); }
 .section-title { font-size: 14px; flex-shrink: 0; margin-bottom: 4px; }
 .archive-note { color: rgb(51, 70, 61); flex-shrink: 0; margin-bottom: 8px; }
 
@@ -128,6 +132,17 @@
 .dropdown .unity-text-element { color: rgb(224, 225, 201); }
 .dropdown .unity-base-popup-field__input { background-color: rgb(38, 42, 42); }
 
+/* Measured, not guessed: the theme lays the popup's own text element out as a 10.7-unit line box
+   no matter how tall the field is, so the 14-unit font it inherits is drawn in a box too short
+   for it and every selected value is cut in half ("fBm 团簇" read as a partial line in both
+   captures). The box is 32 units inside this 34-unit field; a definite minimum is what the
+   layout honours here. */
+.dropdown .unity-base-popup-field__text,
+.dropdown .unity-base-popup-field__input > .unity-text-element {
+    min-height: 24px;
+    -unity-text-align: middle-left;
+}
+
 .controls { height: 48px; flex-shrink: 0; align-items: flex-end; padding-top: 8px; }
 .control {
     height: 40px;
@@ -156,14 +171,39 @@
    =========================================================================== */
 .seed-row { flex-direction: row; align-items: center; flex-shrink: 0; }
 
-.seed-field { flex-grow: 1; height: 28px; margin: 0 6px 0 0; }
-.seed-field .unity-base-field__label,
-.seed-field .unity-base-text-field__input { color: rgb(224, 225, 201); font-size: 11px; }
-.seed-field .unity-base-text-field__input { background-color: rgb(38, 42, 42); border-width: 1px; border-color: rgb(141, 153, 140); }
+/* The field's own label is only a caption; the input is what has to show a value. The
+   label used to take the free width and push the number into a sliver at the right. */
+.seed-field { flex-grow: 1; height: 30px; margin: 0 6px 0 0; }
+.seed-field .unity-base-field__label {
+    flex-grow: 0;
+    flex-shrink: 0;
+    min-width: 0;
+    padding-right: 6px;
+    color: rgb(224, 225, 201);
+    font-size: 11px;
+}
+.seed-field .unity-base-text-field__input {
+    background-color: rgb(38, 42, 42);
+    border-width: 1px;
+    border-color: rgb(141, 153, 140);
+    color: rgb(224, 225, 201);
+    font-size: 11px;
+}
+
+/* The seed number was unreadable in the Player: "20260915" came out as a thin band of glyph
+   fragments. The field's height was never the problem -- the theme's own vertical padding on
+   the editable text leaves a content box a few units tall, and the digits are clipped to it.
+   The slider value fields below never had this because they zero the padding, which is why
+   "0.32" and "40" were legible in the same captures while the seed was not. */
+.seed-field .unity-base-text-field__input,
+.seed-field .unity-base-text-field__input .unity-text-element {
+    padding-top: 0;
+    padding-bottom: 0;
+}
 
 .seed-button {
     width: 30px;
-    height: 28px;
+    height: 30px;
     margin: 0;
     padding: 0;
     background-color: rgb(75, 87, 84);
@@ -188,7 +228,18 @@
 }
 .seed-slider .unity-base-slider__drag-container { margin-left: 2px; margin-right: 2px; }
 
-.seed-mode { height: 28px; }
+/* The same defect as the dropdown values, in the text-input family: the theme lays the editable
+   text out as an 8.6-unit line box whatever the field height is, so the 11-unit seed number and
+   the sliders' own value boxes are cut. Measured: '20260915' needs 12.9 units of height inside
+   the 30-unit seed field. */
+.unity-text-element--inner-input-field-component {
+    min-height: 18px;
+    -unity-text-align: middle-left;
+}
+
+/* The seeding mode selector deliberately has NO height override. A 28-unit one cut the
+   popup's own text box in half and the mode read as half a line of text in both captures;
+   it now uses the same 34-unit height as the boundary and backend selectors. */
 
 .seed-density { color: rgb(37, 58, 48); font-size: 10px; margin-top: 2px; flex-shrink: 0; }
 
@@ -228,10 +279,11 @@
    of the two regions never overlapping. */
 .compact .library { width: auto; flex-grow: 0; flex-direction: column; }
 
-/* In the stacked layout the tool pages take a full row, so the seeding controls
-   flow horizontally instead of stacking in a narrow column. */
+/* In the stacked layout the tool pages take a full row. The scrolling page is capped in
+   height so it can never push the board or the shared controls around; what flows
+   horizontally inside it is the content container, styled further down. */
 .compact .tool-page { width: 100%; max-height: 320px; }
-.compact .tool-page-seeding { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.compact .tool-page-seeding { max-height: 320px; }
 
 /* The controls row is a single unwrapped flex row of fixed-width buttons. In a narrow panel it
    ran off the right edge and clipped "清空" entirely (visible in the 600x1000 capture). It must
@@ -257,13 +309,33 @@
 .compact .archive-note { width: 100%; }
 .compact .preset-scroll { width: 100%; flex-grow: 1; min-height: 132px; }
 .compact .field-label { width: 100%; }
-.compact .dropdown { width: 180px; }
 
-/* In the stacked layout the library becomes a wrapping row, so the seeding block
-   takes a full row of its own rather than a narrow column. */
-.compact .seed-row { width: 100%; }
-.compact .seed-field { width: 140px; flex-grow: 0; }
-.compact .seed-slider { width: 220px; margin-right: 10px; }
-.compact .seed-actions { width: 100%; }
-.compact .control-small { flex-grow: 0; min-width: 84px; }
+/* 260 units is what "GPU（Compute Shader）" needs at font-size 10 with the field's own
+   padding; at 180 the backend name was cut to "GPU（Compute Shade". */
+.compact .dropdown { width: 260px; }
+
+/* --- the seeding page in the stacked layout ------------------------------------
+   The controls are direct children of the scroll view's content container (class
+   "seed-page"), which is the element that has to become a wrapping row. Styling the
+   scroll view left the container sizing itself to its widest child, so the whole panel
+   sat in a ~220-unit column with the rest of the row empty. */
+.compact .seed-page {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    width: 100%;
+}
+.compact .seed-page > .field-label { width: 100%; }
+
+/* Mode and seed share the first line: the seed row takes whatever is left, so the number
+   has room instead of being squeezed into a sliver. */
+.compact .seed-mode { width: 200px; margin: 0 10px 6px 0; }
+.compact .seed-row { flex-grow: 1; min-width: 240px; margin-bottom: 6px; }
+.compact .seed-field { width: auto; flex-grow: 1; }
+
+/* Two sliders per line at any panel width: a percentage wraps where a fixed width
+   would either overflow a narrow window or waste a wide one. */
+.compact .seed-slider { width: 48%; margin: 0 2% 6px 0; }
 .compact .seed-density { width: 100%; }
+.compact .seed-actions { width: 100%; }
+.compact .seed-actions .control-small { flex-grow: 1; }

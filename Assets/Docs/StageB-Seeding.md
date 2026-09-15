@@ -52,34 +52,81 @@
 `LifeSeedingSession` 持有参数、候选和上次确认的参数；`LifeGridElement` 的
 `ShowPreview` 把候选写进渲染器自己的上传缓冲，**完全不经过后端**。
 
-参数变化后**防抖 200 ms**，再由后台线程生成（不可变参数快照 + 两个固定缓冲交替）；
-控件更新与 GPU 上传仍在主线程。生成期间可以继续调参或取消，**只采纳最新请求的结果**，
-迟到结果一律丢弃。
+### 4.1 三个状态，不是两个
+
+后台生成与用户操作之间的约束靠三个互相独立的问题撑开，混在一起就是上一轮的缺陷来源：
+
+| 问题 | 属性 | 谁可以用它 |
+|---|---|---|
+| 用户是否在等一个描述当前控件的候选 | `IsGenerating` | **只有它**可以锁运行/单步/绘制，也只有它显示「生成中…」 |
+| 后台是否还有任务在收尾 | `IsWorking` | **谁都不能锁**。取消之后它还会真一段时间——被放弃的任务仍要跑完 |
+| 是否已发出、尚未采纳的请求 | `HasPendingRequest` | 决定泵送时要不要补发 |
+
+上一版把「有任务在跑」直接当成 `IsGenerating`，于是取消之后的下一次泵送又把界面锁回去。
+现在 `IsGenerating` 是**计算属性**（`wantCandidate && 没有与当前参数一致的候选`），
+没有可以变陈旧的字段，取消当场为假，之后的每一次泵送也都保持为假。
+
+### 4.2 参数决定能不能采纳，不由完成顺序决定
+
+采纳一个结果的条件是**它由当前参数生成**（`finishedParameters.Equals(Parameters)`），
+不是「它的请求号最新」。`SetParameters` 因此**当场**让在途请求失效：
+已经跑起来的任务可以跑完，但它产出的是控件已经离开的那组参数，到达时被丢弃，
+而不是下一帧被上传显示。
+
+防抖 200 ms 只决定**新的计算什么时候被请求**，不决定旧结果还算不算数。
+请求发出时若旧任务仍在跑，请求会挂起（`HasPendingRequest`），
+旧任务结束后立即以最新参数启动——一次长拖拽因此合并成「最多多算一次」，
+而不是每个事件算一次，也不是一次都不算。
+
+跨会话生命周期：`OnDestroy` 调用 `Seeding.Dispose()`，**不在主线程等待任务结束**——
+退出路径阻塞等一个没人要的结果会把干净退出变成卡顿。任务自己跑完，结果被 `disposed` 拒绝。
 
 | 动作 | 结果 |
 |---|---|
-| 调参数 | 只更新候选。防抖后重新生成；生成期间界面显示「生成中…」，应用保持禁用 |
+| **未进入预览时调参数** | **只改参数**。不请求生成、不产生候选、不锁任何控件；棋盘照常运行 |
+| 进入预览 | 暂停时钟并开始生成；预览期间调参数才防抖重算 |
+| 调参数（预览中） | 立即让旧结果失效，防抖后重算。防抖窗口内显示「预览待更新」，计算中显示「生成中…」，应用保持禁用 |
 | 预览 | 候选上台，**真实棋盘一格不动**；活细胞显示为克制的琥珀色 |
-| 应用 | 候选成为实验初态，世代清零，保持暂停；活细胞回薄荷绿；清除样本选中高亮 |
-| 取消 | 丢掉候选，恢复进入预览前的标题与样本高亮。**棋盘从未被移动过，所以没有东西需要恢复** |
+| 应用 | 候选成为实验初态，世代清零，保持暂停；活细胞回薄荷绿；清除样本选中高亮。若预览尚未与控件一致，意图被记住，**只在一个被采纳的候选上花掉**，被丢弃的结果消耗不了它 |
+| 取消 | 丢掉候选，恢复进入预览前的标题与样本高亮，**界面当场恢复可用** |
 | 重置 | 恢复上一次确认的初态（阶段 A 的语义，未被本阶段改变） |
 | 换种子 | 独立按钮，且是显式操作 |
 | 运行 / 单步 / 绘制细胞 | **预览中禁用**，命令入口自身也检查状态 |
 | 平移 / 缩放 | **预览中仍可用**——只改视图 |
 | 选样 / 清空 / 重置 / 随机播种 / 切换后端 | **先统一结束预览**，再执行原命令 |
+| 生成抛异常 | 会话停止等待（`wantCandidate` 复位）并记录 `FailureMessage`，界面显示「生成失败」。**不留下一个永远转圈的「生成中」** |
 
 `Apply` 返回的是**副本**而不是会话内部缓冲：调用方把它存成实验初态，而会话下一次
 生成会覆盖自己的缓冲——不复制的话「重置」恢复的板子会被悄悄改写。
 
 ## 5. 证据
 
-### 测试（EditMode 65/65，PlayMode 24/24）
+### 测试（EditMode 73/73，PlayMode 39/39）
+
+异步时序靠**注入的可控生成器**验证：`LifeSeedingSession` 的构造函数接受一个
+`LifeBoardGenerator`，测试用按种子开关的闸门把「旧任务还没跑完」变成可观察状态，
+而不是和机器的速度赛跑。
+
+参数、淘汰与生命周期：
+
+| 验收条件 | 测试 |
+|---|---|
+| 未进入预览时调参不生成任何东西 | 会话：`SetParameters_AloneDoesNotGenerate`（注入计数生成器，断言调用次数为 0）<br>界面：`EditingSeedParameters_WithoutPreview_DoesNotGenerateOrLockTheBoard`（从**运行中**的棋盘出发，驱动真实滑块，等过防抖窗口，再按单步验证控件真的可用） |
+| A 未完成 → 改 B → A 完成不得采纳 → B 完成才显示 | `ChangingParametersWhileAGenerationRuns_DropsItAndAdoptsTheNewerOne`（并检查此时 `Apply` 拒绝、B 落地后 `Apply` 落在 B 上） |
+| 参数一变，在途请求立即失效 | `SetParameters_InvalidatesAnOutstandingRequestImmediately` |
+| 取消后界面立即恢复，且后续每次泵送都不再锁住 | `Cancel_ReleasesTheInterfaceWhileTheAbandonedTaskIsStillRunning`（**在旧任务未完成时**检查 `IsGenerating`/`IsWorking`/`HasPendingRequest`，并连泵 20 次） |
+| 取消后重新请求不被旧任务顶替 | `Cancel_ThenRequestingAgain_IsNotServedByTheAbandonedTask` |
+| 销毁后迟到结果不被采纳 | 会话：`Dispose_WhileAGenerationRuns_RefusesTheLateResult`（任务在跑时销毁）<br>接线：`DestroyingTheController_DisposesTheSeedingSession`（真的销毁一个控制器实例，查会话被释放） |
+| 自动应用意图不被旧结果消耗 | `ApplyingAnOutOfDatePreview_AppliesTheNewestParameters`（同一帧内改参数，等到的初态必须来自最新参数） |
+| 生成失败不锁死界面 | `GeneratorFailure_ReleasesTheInterfaceInsteadOfWaitingForever` |
+
+播种本身：
 
 | 验收条件 | 测试 |
 |---|---|
 | 相同参数生成相同初态 | `SameParameters_ProduceTheIdenticalBoard` |
 | cluster strength=0 退化为均匀 | `ClusterStrengthZero_IsExactlyTheUniformMode`（与 Uniform 模式**逐格相同**） |
-| warp strength=0 退化为未扭曲 fBm | `WarpStrengthZero_IsExactlyTheUnwarpedField`（与测试里独立重组的期望逐格相同） |
+| warp strength=0 退化为未扭曲 fBm | `WarpStrengthZero_IsExactlyTheUnwarpedField`（与测试里独立重组期望逐格相同） |
 | —— 且该测试非空转 | `WarpStrengthAboveZero_ActuallyChangesTheBoard` |
 | CPU/GPU 初态逐格一致 | `AppliedSeeding_IsCellIdenticalOnBothBackends`（GPU 应用后切 CPU 比对） |
 | 应用后演化不再读取噪声 | `EvolutionAfterSeeding_DoesNotConsultTheNoise`（空盘面必须保持空） |
@@ -113,6 +160,20 @@
 **棋盘、世代/人口/状态读数、工具区、底部操作互不遮挡**。
 堆叠布局尤其要看这一项——宽布局通过不代表竖屏通过。
 
+**文字也逐项确认，而且可以量。** 上一版只检查了控件的外框，于是漏掉了三类被裁切的文字。
+现在 `SeedingPanel_UsesThePageWidth_AndShowsItsWholeText` 用 `MeasureTextSize` 把每个值的
+渲染文字与画它的盒子逐项比对，宽布局与堆叠布局各跑一遍（测试里临时改参考分辨率来得到
+竖屏的面板宽度，不动窗口）。它当场量出了两件事：
+
+| 量到的 | 数值 | 后果 |
+|---|---|---|
+| 下拉框自己的文本元素 | 盒高 **10.7**，字号 14 | 三个下拉框的选中值都被切掉一半 |
+| 种子输入的可编辑文本元素 | 盒高 **8.6**，字号 11 | 「20260915」只剩一条模糊的横带 |
+
+原因不同，修法也不同：前者是主题给 popup 文本固定了一个 10.7 的行盒（给 `min-height` 即可），
+后者是主题给可编辑文本的上下内边距吃掉了行高（滑块自己的数值框一直正常，因为它把内边距清零了）。
+两类都记在 `LifeTerminal.uss` 里，附上量到的数字。
+
 ## 6. 工具区结构
 
 右侧工具区是**「样本 / 播种」两个页签**，边界条件与演算后端是两个页面共用的控件。
@@ -123,7 +184,22 @@
 堆叠布局下工具页在棋盘与读数下方占满整行，播种页自己滚动，
 工具区高度有上界，不会推挤棋盘。
 
-## 6. 已知限制
+### 6.1 播种页为什么曾经挤在左窄列
+
+播种面板的控件加进的是 `ScrollView` 的**内容容器**，而堆叠布局的规则写在 `ScrollView` 上。
+容器因此完全没被管到，宽度收缩到最宽子元素（约 220 单位），右侧整片空着。
+控件本来就该由容器负责排版，所以现在给容器一个 `seed-page` 类，
+堆叠布局下它是**占满宽度的换行行**：模式与种子同一行，四个滑块每行两个（百分比宽度，
+任何面板宽度下都成立），读数与按钮各占一整行。
+
+顺带量出来的两处宽度：
+
+| 控件 | 之前 | 现在 | 原因 |
+|---|---|---|---|
+| 后端下拉框（宽布局） | 列宽 236，文本框 154 | 列宽 **280**，文本框 198 | 「GPU（Compute Shader）」需要 165 单位，popup 自己占掉 82 |
+| 后端/边界下拉框（竖屏） | 固定 180 | 固定 **260** | 同上，180 只能显示到「GPU（Compute Shade」 |
+
+## 7. 已知限制
 
 | 限制 | 说明 |
 |---|---|
@@ -133,7 +209,7 @@
 | 未做过渡动画 | 规格明确要求先验证"预览与实际播种一致、可取消、可复现"，再打磨动画 |
 | 堆叠布局底部有空白 | 工具区在堆叠布局下不伸展（`flex-grow: 0`）。试过让它伸展，结果工具区与棋盘区重叠，故选回不遮挡的一版 |
 
-## 7. 一个测量方法上的失败，如实记录
+## 8. 一个测量方法上的失败，如实记录
 
 先想从截图反推聚集程度，**失败了两次**：第一次采样区域画错，测出的密度只有实际的一半；
 第二次把浅色 UI 面板误判成活细胞。棋盘区域后来定位正确（1021×532），但颜色分类仍不可靠。
@@ -141,7 +217,7 @@
 **结论：放弃截图统计。** 量化结论改由数据层测量承担。截图只作为视觉证据。
 从截图采样像素来做定量判断，在这个界面上不是可靠的测量通道。
 
-## 8. 一次观察，不是普遍规律
+## 9. 一次观察，不是普遍规律
 
 在**本次参数、本次尺寸**下观察到：密度 0.31 的随机盘面在 B3/S23 下演化到第 23 代后，
 密度落到约 0.16，分块起伏与均匀播种的差别也变得很小。
@@ -152,7 +228,7 @@
 
 它对本阶段的实际影响是：**预览必须在第 0 代看**，演化几代之后再比较就说明不了播种本身。
 
-## 9. 复现
+## 10. 复现
 
 ```powershell
 # 应用一次 fBm 播种（1024²）
@@ -169,3 +245,15 @@ Builds\LifeTerminal.exe ... -lifeSeedApply -lifeSeedUniform -lifeDensity 0.32
 
 参数：`-lifeSeedApply` / `-lifeSeedPreview` / `-lifeSeedUniform` / `-lifeSeed <int>` /
 `-lifeDensity <float>` / `-lifeScale <float>` / `-lifeWarp <float>` / `-lifeCluster <float>`。
+
+两张界面截图由 `Tools/capture-player-window.ps1` 拍摄（它是本轮的产物：上一轮的截图取自
+窗口矩形，右边缘与底边缘各带进来一条桌面像素）。脚本按**客户区**抓图并做 DPI 感知：
+
+```powershell
+$seed = '-lifeBoard 256x256 -lifeZoom 1 -lifeSeedPreview -lifeSeed 20260915 ' +
+        '-lifeDensity 0.32 -lifeScale 40 -lifeWarp 8 -lifeCluster 0.7'
+.\Tools\capture-player-window.ps1 -Width 1600 -Height 900 -Arguments $seed `
+    -Output Screenshots\player-seed-ui-1600x900.png
+.\Tools\capture-player-window.ps1 -Width 600 -Height 1000 -Arguments $seed `
+    -Output Screenshots\player-seed-ui-600x1000.png
+```

@@ -2,7 +2,7 @@
 
 用 Unity 6000.6.0f1 实现康威生命游戏（Conway's Game of Life）的核心逻辑，附带一套可复现的自动化验证。
 
-![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-32%20EditMode%20%2B%2013%20PlayMode-brightgreen)
+![引擎](https://img.shields.io/badge/Unity-6000.6.0f1-black) ![测试](https://img.shields.io/badge/tests-73%20EditMode%20%2B%2039%20PlayMode-brightgreen)
 
 ---
 
@@ -74,7 +74,7 @@ unity test . --mode PlayMode --output test-results-playmode.xml
 
 或在 Unity 中打开 **Window → General → Test Runner** 分别运行 EditMode / PlayMode。
 
-**当前结果：EditMode 32/32 通过，PlayMode 13/13 通过。**
+**当前结果：EditMode 73/73 通过，PlayMode 39/39 通过。**
 
 ### 测试覆盖了什么
 
@@ -182,30 +182,46 @@ Assets/
 │   ├── ConwayGameOfLife.Runtime.asmdef
 │   ├── LifeSimulation.cs          # 纯 C# 规则引擎（不依赖 UnityEngine）
 │   ├── LifePatterns.cs            # 8 个内置样本及其分类
-│   ├── LifeGridElement.cs         # 用 Painter2D 自绘网格 + 鼠标编辑
+│   ├── ILifeBackend.cs            # 演化后端接口（CPU / GPU 同构）
+│   ├── CpuLifeBackend.cs          # 参考后端
+│   ├── GpuLifeBackend.cs          # Compute Shader 后端
+│   ├── LifeBoardRenderer.cs       # 状态缓冲 → 视口贴图的公共显示路径
+│   ├── LifeGridElement.cs         # 网格显示 + 鼠标编辑 + 琥珀色预览
+│   ├── LifeNoiseSeeding.cs        # 纯函数 fBm + 域扭曲播种（CPU，可复现）
+│   ├── LifeSeedingSession.cs      # 参数 / 候选 / 后台生成状态机（纯 C#）
 │   ├── PanelScreenFit.cs          # 面板缩放数学（纯函数，可跨分辨率单测）
-│   └── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
+│   ├── LifeTerminalController.cs  # UI Toolkit 界面装配与演化驱动
+│   ├── LifePerfProbe.cs           # Player 内 `-lifePerf` 测量探针
+│   └── RuntimeLayoutProbe.cs      # Player 内 `-lifeLayoutProbe` 布局校验探针
 ├── Tests/
-│   ├── EditMode/                  # 规则、边界、簿记、样本行为、分辨率数学（37 项）
+│   ├── EditMode/                  # 规则、边界、簿记、样本行为、噪声、会话状态机（73 项）
 │   │   ├── ConwayGameOfLife.Tests.EditMode.asmdef
 │   │   ├── LifeSimulationTests.cs
-│   │   └── LifePatternTests.cs
-│   └── PlayMode/                  # 界面自举、交互、布局适配、性能口径（13 项）
+│   │   ├── LifePatternTests.cs
+│   │   ├── LifeNoiseSeedingTests.cs
+│   │   └── LifeSeedingSessionTests.cs
+│   └── PlayMode/                  # 界面自举、交互、布局与文字适配、性能口径（39 项）
 │       ├── ConwayGameOfLife.Tests.PlayMode.asmdef
-│       └── LifeTerminalBootstrapTests.cs
+│       ├── LifeTerminalBootstrapTests.cs
+│       ├── LifeSeedingIntegrationTests.cs
+│       └── GpuCpuEquivalenceTests.cs
 ├── Editor/
 │   ├── PlayerBuild.cs             # 开发版 Player 构建入口（-executeMethod 调用）
 │   └── CaptureLayoutTool.cs       # 编辑器内布局截图诊断
 ├── link.xml                       # 保留运行时探针，防止托管剥离移除
 ├── Resources/
+│   ├── LifeGpu.compute            # Step / Render 两个 kernel
 │   ├── LifeTerminal.uss           # 终端风格样式
 │   └── LifeRuntimeTheme.tss       # 主题入口
 └── Docs/
     ├── TechnicalAnalysis.md       # 技术分析：规则、架构、复杂度、性能实测
     ├── Implementation.md          # 实现文档：模块、数据流、扩展方式
+    ├── StageA-Gpu.md              # 阶段 A：GPU 演化与显示
+    ├── StageB-Seeding.md          # 阶段 B：fBM + 域扭曲概率播种
     └── PROJECT_LOG.md             # 工作记录：声称→证据对照、决策、未决张力
 
 Screenshots/                        # 真实 Player 截图与原始测量记录
+Tools/                              # 截图脚本（客户区抓图，DPI 感知）
 .verify/                            # 独立校验工具（不属于 Unity 工程）
 ```
 

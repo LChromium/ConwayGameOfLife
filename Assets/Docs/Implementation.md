@@ -212,7 +212,7 @@ flowchart TB
         SB["top-line：LIFE TERMINAL · MODEL 1970 ｜ CELLULAR AUTOMATA / B3 · S23"]
         subgraph WORKSPACE["workspace — 横向两栏"]
             DISP["display<br/>screen-bar：样本 05 / 脉冲星 · PULSAR ｜ 96 × 64 / LIVE FIELD<br/><br/>life-grid（Painter2D 自绘网格）<br/><br/>readouts：GENERATION / 世代 ｜ POPULATION / 存活 ｜ STATE / 状态"]
-            LIB["library（固定 236px）<br/>样本档案<br/>SPECIMEN ARCHIVE / 08 ENTRIES<br/><br/>preset-scroll：8 个样本按钮<br/><br/>dropdown：边界条件"]
+            LIB["library（固定 280px）<br/>样本 / 播种 两个页签<br/><br/>preset-scroll：8 个样本按钮<br/><br/>dropdown：边界条件、演算后端"]
         end
         CTL["controls：［▶ 运行］［▸ 单步］［↺ 重置］ ｜ 速率 ──●── ｜ ［随机播种］［清空］"]
     end
@@ -226,7 +226,7 @@ flowchart TB
 ```
 
 > 上图表达**从属关系与排列顺序**：根元素 `.app` 下依次是 `header` / `machine` / `footer`；`machine` 内为 `top-line` → `workspace` → `controls`；`workspace` 是 `display` 与 `library` 两栏并排。
-> **像素比例无法用 Mermaid 表达**——`library` 固定 236px，其余宽度全部归 `display`。真实观感见 `Screenshots/` 下的实机截图。
+> **像素比例无法用 Mermaid 表达**——`library` 固定 280px，其余宽度全部归 `display`。真实观感见 `Screenshots/` 下的实机截图。
 
 样式在 `Assets/Resources/LifeTerminal.uss`，采用终端机/仪器面板的视觉隐喻（金属外壳、暗色屏幕、琥珀色读数）。使用 USS 变量集中定义调色板：
 

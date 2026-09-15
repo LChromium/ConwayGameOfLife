@@ -739,6 +739,226 @@ namespace ConwayGameOfLife.Tests
                       $"Cite this line as the source for any per-generation figure.");
         }
 
+        [UnityTest]
+        public IEnumerator SeedingPanel_UsesThePageWidth_AndShowsItsWholeText()
+        {
+            // Two review findings, both about the seeding panel rather than its logic:
+            // the stacked layout squeezed every control into a ~220-unit column with the
+            // rest of the row empty, and three controls cut their own text (the seed
+            // number, the backend name, and the mode selector's half-height line).
+            //
+            // "Fits" is measured here, not squinted at: every value's rendered text is
+            // compared with the box that draws it, in both dimensions.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            Press(root.Q<Button>("tool-tab-seeding"));
+            yield return null;
+
+            // The PlayMode host is 640x480, which is the compact layout at ~1130 units --
+            // wider than the 600x1000 portrait capture (~690). Narrowing the reference
+            // resolution narrows the panel without touching the window, so the same checks
+            // also run at the width the portrait capture actually has.
+            PanelSettings settings = Document().panelSettings;
+            Vector2Int original = settings.referenceResolution;
+            try
+            {
+                settings.referenceResolution = new Vector2Int(800, 450);
+                yield return null;
+                yield return null;
+
+                CheckSeedingPanelGeometry(root, "portrait-width");
+            }
+            finally
+            {
+                settings.referenceResolution = original;
+            }
+
+            yield return null;
+            yield return null;
+            CheckSeedingPanelGeometry(root, "host-width");
+        }
+
+        /// <summary>
+        /// Asserts the seeding page uses the width it has, and that every value it shows
+        /// fits the element that draws it. Runs at whatever panel width is current.
+        /// </summary>
+        private static void CheckSeedingPanelGeometry(VisualElement root, string label)
+        {
+            ScrollView page = root.Q<ScrollView>("tool-page-seeding");
+            Assert.IsNotNull(page, "missing the seeding page");
+            Assert.IsNotNull(page.contentContainer, "the seeding page has no content container");
+
+            VisualElement content = page.contentContainer;
+            float panelWidth = root.resolvedStyle.width;
+            float contentWidth = content.worldBound.width;
+            bool compact = root.ClassListContains("compact");
+
+            Debug.Log($"[seeding-layout] {label}: panel={panelWidth:F0} page={page.worldBound.width:F0} " +
+                      $"content={contentWidth:F0} compact={compact}");
+
+            Assert.AreEqual(panelWidth < 1280f, compact,
+                $"{label}: at a panel width of {panelWidth:F0} the stacked layout should " +
+                $"{(panelWidth < 1280f ? string.Empty : "not ")}be active");
+            Assert.Greater(contentWidth, 250f,
+                $"{label}: the seeding page's content container is only {contentWidth:F0} units wide");
+
+            Slider[] sliders =
+            {
+                root.Q<Slider>("seed-density"),
+                root.Q<Slider>("seed-scale"),
+                root.Q<Slider>("seed-warp"),
+                root.Q<Slider>("seed-cluster"),
+            };
+
+            foreach (Slider slider in sliders)
+                Assert.IsNotNull(slider, "a seeding slider is missing");
+
+            if (compact)
+            {
+                // The page must actually use the width it has: four sliders one per line in a
+                // ~220-unit column was the defect. Two sharing a line that reaches across the
+                // page is what "uses the width" means.
+                int sharedLines = 0;
+                for (int i = 0; i < sliders.Length; i++)
+                {
+                    for (int j = i + 1; j < sliders.Length; j++)
+                    {
+                        if (Mathf.Abs(sliders[i].worldBound.yMin - sliders[j].worldBound.yMin) < 1f)
+                            sharedLines++;
+                    }
+                }
+
+                Assert.GreaterOrEqual(sharedLines, 2,
+                    $"{label}: the seeding sliders are stacked one per line instead of using the page width " +
+                    $"(panel {panelWidth:F0}, content {contentWidth:F0})");
+
+                float rightMost = float.MinValue;
+                foreach (Slider slider in sliders)
+                    rightMost = Mathf.Max(rightMost, slider.worldBound.xMax);
+
+                Assert.Greater(rightMost - content.worldBound.xMin, contentWidth * 0.8f,
+                    $"{label}: the slider rows reach only {rightMost - content.worldBound.xMin:F0} of " +
+                    $"{contentWidth:F0} available units");
+            }
+            else
+            {
+                // The side-by-side layout is a 268-unit column: it is used fully or the
+                // controls are wasting it, which is the same defect mirrored.
+                foreach (Slider slider in sliders)
+                {
+                    Assert.GreaterOrEqual(slider.worldBound.width, contentWidth * 0.9f,
+                        $"{label}: slider '{slider.name}' is {slider.worldBound.width:F0} units wide in a " +
+                        $"{contentWidth:F0}-unit column");
+                }
+            }
+
+            // 2. Every value has to fit the element that renders it, in both directions.
+            //    Measured rather than eyeballed: it was this comparison (10.7 units of box
+            //    against 19.3 units of text) that found the cut-off dropdown values.
+            DropdownField mode = root.Q<DropdownField>("seed-mode");
+            DropdownField backend = root.Q<DropdownField>("backend-field");
+            DropdownField boundary = root.Q<DropdownField>("boundary-field");
+            IntegerField seed = root.Q<IntegerField>("seed-field");
+
+            var fits = new List<TextFit>
+            {
+                Measure(mode, mode.value, $"{label}: seeding mode"),
+                Measure(boundary, boundary.value, $"{label}: boundary"),
+                Measure(seed, "20260915", $"{label}: seed value"),
+            };
+
+            foreach (string choice in backend.choices)
+                fits.Add(Measure(backend, choice, $"{label}: backend choice"));
+
+            foreach (TextFit fit in fits)
+            {
+                Assert.GreaterOrEqual(fit.AvailableWidth, fit.TextWidth - 0.5f,
+                    $"{fit.What}: '{fit.Text}' needs {fit.TextWidth:F1} units of width but the field " +
+                    $"provides {fit.AvailableWidth:F1}");
+                Assert.GreaterOrEqual(fit.BoxHeight, fit.TextHeight - 0.5f,
+                    $"{fit.What}: '{fit.Text}' needs {fit.TextHeight:F1} units of height but its line " +
+                    $"box is {fit.BoxHeight:F1} tall, so the text is cut");
+            }
+        }
+
+        /// <summary>One control's text measured against the box that would draw it.</summary>
+        private sealed class TextFit
+        {
+            public string What;
+            public string Text;
+            public float TextWidth;
+            public float TextHeight;
+            public float BoxWidth;
+            public float BoxHeight;
+            public float AvailableWidth;
+            public float FontSize;
+        }
+
+        private static TextFit Measure(VisualElement control, string text, string what)
+        {
+            // The element that actually draws the value. Not the caption: a field's label
+            // is a Label, and Labels are TextElements too, so picking the first TextElement
+            // would measure the caption instead of the value.
+            TextElement input = null;
+            foreach (TextElement candidate in control.Query<TextElement>().ToList())
+            {
+                if (candidate is Label)
+                    continue;
+
+                if (input == null || candidate.worldBound.width > input.worldBound.width)
+                    input = candidate;
+            }
+
+            Assert.IsNotNull(input, $"{what}: no value text element found inside {control.GetType().Name}");
+
+            Vector2 measured = input.MeasureTextSize(text, 0f, VisualElement.MeasureMode.Undefined,
+                0f, VisualElement.MeasureMode.Undefined);
+            IResolvedStyle style = input.resolvedStyle;
+
+            var fit = new TextFit
+            {
+                What = what,
+                Text = text,
+                TextWidth = measured.x,
+                TextHeight = measured.y,
+                BoxWidth = input.worldBound.width,
+                BoxHeight = input.worldBound.height,
+                AvailableWidth = input.worldBound.width - style.paddingLeft - style.paddingRight,
+                FontSize = style.fontSize,
+            };
+
+            Debug.Log($"[seeding-text] {what}: '{text}' needs {measured.x:F1}x{measured.y:F1}, " +
+                      $"font {style.fontSize:F1}; drawn in <{string.Join(".", input.GetClasses())}> " +
+                      $"world {input.worldBound.width:F1}x{input.worldBound.height:F1} " +
+                      $"resolved {style.width:F1}x{style.height:F1}");
+            Debug.Log($"[seeding-text] {what}: ancestors " + AncestorBoxes(input, control));
+
+            Assert.IsFalse(float.IsNaN(fit.AvailableWidth),
+                $"{what}: the text element has no resolved width, so nothing can be measured");
+
+            return fit;
+        }
+
+        /// <summary>Boxes from the text element up to the control, to locate a squeezed line.</summary>
+        private static string AncestorBoxes(VisualElement input, VisualElement control)
+        {
+            var chain = new List<string>();
+            VisualElement current = input;
+            while (current != null)
+            {
+                chain.Add($"{current.GetType().Name}({current.name})=" +
+                          $"{current.worldBound.width:F1}x{current.worldBound.height:F1}");
+
+                if (current == control)
+                    break;
+
+                current = current.parent;
+            }
+
+            return string.Join(" <- ", chain);
+        }
+
         private static int ReadGeneration(LifeTerminalController controller)
         {
             return ReadBackend(controller).Generation;
