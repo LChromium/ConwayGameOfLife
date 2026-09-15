@@ -207,9 +207,9 @@ namespace ConwayGameOfLife.Tests
         private LifeAsyncCpuBackend injected;
 
         /// <summary>
-        /// Set by a test that allocated large boards, so teardown can hand the memory back before
-        /// whichever fixture runs next measures frames. A test's own iterator still holds its
-        /// locals while its finally block runs, so the collection has to happen after it returns.
+        /// Set by a test that allocated large boards, so teardown can hand the memory back instead of
+        /// leaving it for the next fixture that measures frames. A test's own iterator still holds
+        /// its locals while its finally block runs, so the collection has to happen after it returns.
         /// </summary>
         private bool collectAfterThisTest;
 
@@ -383,31 +383,35 @@ namespace ConwayGameOfLife.Tests
                 Assert.Greater(outcome.ComputeMilliseconds, 0.0, "the worker must report its own compute cost");
 
                 // Same board, same rules, synchronous reference: the answer has to match cell for
-                // cell, or moving the work off the frame changed the simulation.
+                // cell, or moving the work off the frame changed the simulation. Buffers are
+                // REUSED rather than allocated per readback -- `before` has served its purpose (the
+                // isolation comparison is done) and `during` is idle -- so the whole test needs two
+                // 64 MB readback buffers instead of four, on top of the backend's own four boards.
                 using var reference = new CpuLifeBackend(4096, 4096);
                 reference.WrapEdges = true;
                 reference.LoadBoard(board);
                 reference.Step();
 
-                // Same board, same rules, synchronous reference: THAT comparison lives in the
-                // smaller tests (SecondStepIsRefused_..., ReplacedBoardRefuses_...,
-                // CompletedGeneration_IsWrittenByTheWorker_...), where it costs kilobytes. Here it
-                // would add two more 64 MB readbacks to a test whose subject is isolation, and the
-                // allocations are exactly what the reset of this test is about to hand back.
-                Assert.AreEqual(1, outcome.Generation, "the adopted generation");
-                Assert.Greater(outcome.ComputeMilliseconds, 0.0, "the worker's own step cost");
+                Assert.IsTrue(reference.TryReadAllCells(before), "the reference refused a readback");
+                Assert.IsTrue(backend.TryReadAllCells(during), "the adopted board refused a readback");
+                Assert.IsTrue(during.AsSpan().SequenceEqual(before),
+                    "the background result differs from the synchronous reference");
+                Assert.AreEqual(Population(reference), outcome.Population,
+                    "the population travelling with the result is not the population of the new board");
             }
             finally
             {
                 backend.Dispose();
 
-                // This test works on a 4096x4096 board: the backend alone is four 16 MB buffers,
-                // and the comparisons add tens of megabytes more. Ask for them back when this test
-                // is over -- at teardown, when the iterator's own references are gone -- rather
-                // than leaving a collection to land inside a later test's frame window. (Observed:
-                // the stage-A worst-frame bound failed with 270 ms and 455 ms outliers while the
-                // same binary produced 8.33 ms median and 11-17 ms worst frames when the clock test
-                // ran in a quiet process.)
+                // This test works on a 4096x4096 board: the backend alone is four 16 MB buffers and
+                // the readbacks two more. Hand the memory back at teardown, when the iterator's own
+                // references are gone, so the fixture does not leave a few hundred megabytes for
+                // whichever test measures frames next.
+                //
+                // Whether that memory pressure EXPLAINS the unexplained long frames seen in this
+                // environment is NOT established: with 270 ms and 455 ms outliers observed and the
+                // cause unknown, this is hygiene, not a diagnosis. The stage-1 record has the same
+                // shape (one 86.9 s frame, never reproduced).
                 collectAfterThisTest = true;
             }
         }
