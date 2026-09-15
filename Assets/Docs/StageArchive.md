@@ -95,12 +95,19 @@ dotnet run --project .verify/Verify.csproj -c Release -- selftest  # 证伪校�
 |---|---|---|---|
 | 规则吞吐 | 7,600 万格/秒（512×512 固定边界）| `.verify -- bench` | 独立 .NET，**非 Unity** |
 | 规则每代成本 | 0.206 ms/代（96×64 固定边界）| `.verify -- bench` | 独立 .NET |
-| 微基准每代成本 | 0.14–0.23 ms/代 | `[perf-microbench]` 日志行 | **SYNTHETIC**，含同帧复用 deltaTime 与 SendMessage 开销 |
+| 微基准每代成本 | 0.14–0.23 ms/代 | `[perf-microbench]` 日志行（**产生它的测试已在阶段 D 删除，见下**） | **SYNTHETIC**，含同帧复用 deltaTime 与 SendMessage 开销 |
 | Player 暂停 | 8.5 ms/帧 | `player-measurements.jsonl` | 开发版 Player，240 帧 |
 | Player 演化中 | 10.6–10.9 ms/帧 | 同上 | 同上；采样期间确认推进 50–52 代 |
 | 时钟达成速率 | ≈20 代/秒（请求 20）| 同上 | 三个分辨率一致 |
 
 环绕边界的代价：**吞吐下降 39.5%**，等价于**每代耗时增加 65.4%**（同一现象的两个方向）。
+
+> **上表「微基准每代成本」一行的可复现性已失效**：产生 `[perf-microbench]` 的那条 PlayMode
+> 微基准在**阶段 D** 被删除（它测的是「同步 `Update()` 内的推进」，而阶段 D 起 CPU 演化在
+> worker 上算，同一条循环只会测到提交成本，名字与含义都不再成立）。该行因此是本阶段归档时
+> 那一次运行的历史记录，**不能按命令重测**；当前每代成本的出处见
+> [`StageC-Benchmark.md`](StageC-Benchmark.md) §5 与 [`StageD-BackgroundEvolution.md`](StageD-BackgroundEvolution.md) §4.4。
+> 其它行不受影响。
 
 ### 布局与画面
 

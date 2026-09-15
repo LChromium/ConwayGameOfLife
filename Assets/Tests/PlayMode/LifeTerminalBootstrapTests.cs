@@ -692,73 +692,23 @@ namespace ConwayGameOfLife.Tests
                 $"worst frame was {worstFrameMs:F0} ms while evolving - a visible hitch");
         }
 
-        [UnityTest]
-        public IEnumerator MicroBenchmark_StepCostInsideTheEditorRuntime()
-        {
-            // EXPLICITLY A SYNTHETIC MICRO-BENCHMARK, not a picture of real gameplay:
-            //   * every call reuses the same frame's unscaledDeltaTime, and
-            //   * SendMessage adds reflection dispatch overhead per call.
-            // It is reported as a labelled micro-benchmark only, and is deliberately NOT used to
-            // characterise real-time performance. Cross-frame clock behaviour is covered by
-            // Clock_RunsAtTheRequestedRateAcrossRealFrames; grid repaint needs the Unity Profiler.
-            //
-            // Pinned to the GPU backend, which still retires generations inside the call. On the
-            // background CPU path (stage D) a synchronous Update only SUBMITS a generation, so
-            // 2000 of them would measure submissions and then divide by adoptions that happened to
-            // land -- a number with no meaning. The CPU engine's own step cost is measured against
-            // the reference backend in Clock_RunsAtTheRequestedRateAcrossRealFrames instead.
-            yield return Settle();
+        // The synthetic `MicroBenchmark_StepCostInsideTheEditorRuntime` used to live here. It
+        // measured "2000 synchronous Update() calls advance N generations" on the CPU backend, and
+        // stage 1 cited its `[perf-microbench]` line as the source of a per-generation cost.
+        //
+        // Stage D made that shape meaningless: a synchronous Update on the CPU path now SUBMITS a
+        // generation and the worker retires it later, so the same loop would measure submission
+        // plus controller-call overhead and then divide by adoptions that happened to land. Pinning
+        // it to the GPU (an interim fix) measured something else again, and the test's name and its
+        // historical citations would have kept claiming a CPU step cost. It was therefore deleted
+        // rather than renamed:
+        //   * the CPU engine's own step cost is measured against a reference backend in
+        //     Clock_RunsAtTheRequestedRateAcrossRealFrames, and in the stage-C record's evolution
+        //     axis (and stage D compares that against the worker's step, §4.4);
+        //   * the archived stage-1 figures that cite `[perf-microbench]` are marked as historical
+        //     in TechnicalAnalysis.md §5.3 and StageArchive.md §3: they are records of one past run,
+        //     no longer reproducible by a command.
 
-            DropdownField backendField = GetRoot().Q<DropdownField>("backend-field");
-            Assert.IsNotNull(backendField, "missing the backend selector");
-            if (!backendField.enabledSelf)
-                Assert.Ignore("compute shaders unavailable on this machine; the micro-benchmark was not run");
-
-            SelectBackend(GetRoot(), gpu: true);
-            yield return null;
-
-            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
-            Assert.IsNotNull(controller);
-
-            FieldInfo runningField = typeof(LifeTerminalController).GetField(
-                "running", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(runningField, "LifeTerminalController.running field not found");
-
-            // Warm up.
-            for (int i = 0; i < 200; i++)
-            {
-                controller.SendMessage("StepOnce", SendMessageOptions.DontRequireReceiver);
-            }
-
-            yield return null;
-
-            const int calls = 2000;
-            int genBefore = ReadGeneration(controller);
-
-            runningField.SetValue(controller, true);
-            var sw = new System.Diagnostics.Stopwatch();
-            sw.Start();
-            for (int i = 0; i < calls; i++)
-            {
-                controller.SendMessage("Update", SendMessageOptions.DontRequireReceiver);
-            }
-
-            sw.Stop();
-            runningField.SetValue(controller, false);
-
-            int advanced = ReadGeneration(controller) - genBefore;
-            Assert.Greater(advanced, 0, "the micro-benchmark advanced no generations");
-
-            double msPerGeneration = sw.Elapsed.TotalMilliseconds / advanced;
-            ILifeBackend benchBackend = ReadBackend(controller);
-            Debug.Log($"[perf-microbench] SYNTHETIC micro-benchmark - NOT real-time gameplay. " +
-                      $"Board {benchBackend.Width}x{benchBackend.Height} = {benchBackend.Width * benchBackend.Height} cells, " +
-                      $"backend {benchBackend.Name}. {calls} synchronous Update() calls advanced {advanced} " +
-                      $"generations in {sw.Elapsed.TotalMilliseconds:F1} ms => {msPerGeneration:F4} ms/generation. " +
-                      $"Caveats: every call reuses one frame's unscaledDeltaTime, and SendMessage adds " +
-                      $"reflection dispatch overhead per call. Runtime: Unity Editor 6000.6.0f1 PlayMode. " +
-                      $"Cite this line as the source for any per-generation figure.");
-        }
 
         [UnityTest]
         public IEnumerator SeedingPanel_UsesThePageWidth_AndShowsItsWholeText()

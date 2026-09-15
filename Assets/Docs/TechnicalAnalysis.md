@@ -231,11 +231,18 @@ unity test . --mode PlayMode --output tr-pm.xml
 
 ### 5.3 结果：Unity 编辑器运行时（微基准）
 
-> **数据出处**：本节数字来自一次真实 PlayMode 运行写入 `Logs/Editor.log` 的
-> `[perf-microbench]` 行，该运行同时产出提交产物
+> **历史记录（阶段 D 起不再可复现）。** 本节数字来自一次真实 PlayMode 运行写入
+> `Logs/Editor.log` 的 `[perf-microbench]` 行，该运行同时产出提交产物
 > [`test-results-playmode.xml`](../../test-results-playmode.xml)。
 > **本文档只引用这一单一出处。** 不同运行之间数字必有差异；任何引用都必须说明来源，
 > 不得把不同运行的数字混在同一句话里（R3 曾出现过这个问题）。
+>
+> 产生那一行的旧微基准（`MicroBenchmark_StepCostInsideTheEditorRuntime`）**已在阶段 D 删除**：
+> 它的循环测的是「同步 `Update()` 内的推进」，而阶段 D 之后 CPU 演化在 worker 上算，
+> 同样 2000 次调用只会测到提交与控制器调用成本，**不能再叫 CPU 步进微基准**。
+> 因此本节数字只能读作**阶段一当时那一次运行的历史记录**，不能按本文的命令重新测出来；
+> 当前每代成本的出处是 [`StageC-Benchmark.md`](StageC-Benchmark.md) §5 的基准记录
+> （以及阶段 D 文档 §4.4 的 worker 对照）。
 
 测量对象：`LifeTerminalController.Update()` 时钟，棋盘 96×64（6,144 格），
 运行时为 **Unity Editor 6000.6.0f1 / PlayMode**——**不是独立 Player 构建**。

@@ -748,8 +748,10 @@ namespace ConwayGameOfLife
             ReportAsyncFailure(asyncBackend);
 
             // The manual generation, issued only while the pipeline is free. Kept as a flag so a
-            // second press while one is in flight cannot queue a third generation.
-            if (!running && singleStepOutstanding &&
+            // second press while one is in flight cannot queue a third generation -- and it is not
+            // re-issued while a failure stands: a failed pipeline must not keep submitting on its
+            // own, only an explicit action may start it again.
+            if (!running && singleStepOutstanding && asyncFailureLogged == null &&
                 !asyncBackend.IsComputing && !asyncBackend.HasCompletedGeneration)
             {
                 backend.Step();
@@ -759,17 +761,37 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Reports a worker failure once. Without it a backend that throws would leave the clock
-        /// asking for generations that never arrive, with nothing on screen saying why.
+        /// Mirrors the backend's failure state, and acts on it.
+        ///
+        /// <para><b>A current failure stops the automatic submission.</b> The display keeps the
+        /// last complete generation (nothing was adopted), the clock stops, and the readout says
+        /// 演算失败 instead of looking like a board that is merely slow. Nothing submits again
+        /// until an explicit action asks for it: starting the clock, a single step, or replacing
+        /// the board -- those clear the failure, and the backend rebuilds the worker from the
+        /// displayed board before computing anything, so a retry cannot continue from a state that
+        /// had already advanced when it threw.</para>
+        ///
+        /// <para>A failure that belongs to a board which has since been replaced never reaches
+        /// here: the backend refuses it by session identity, exactly as it refuses a stale
+        /// success.</para>
         /// </summary>
         private void ReportAsyncFailure(ILifeAsyncBackend asyncBackend)
         {
             string failure = asyncBackend.FailureMessage;
-            if (failure == null || failure == asyncFailureLogged)
+            if (string.Equals(failure, asyncFailureLogged))
                 return;
 
             asyncFailureLogged = failure;
+
+            if (failure == null)
+            {
+                // Recovered: the retry was accepted, so the pipeline is usable again.
+                RefreshState();
+                return;
+            }
+
             Debug.LogWarning($"[Life] CPU evolution failed: {failure}");
+            Stop();
             RefreshState();
         }
 
@@ -1529,6 +1551,12 @@ namespace ConwayGameOfLife
 
             running = !running;
 
+            // Starting the clock is an explicit retry: a failure that stopped the run does not
+            // survive the user asking for it again. The backend rebuilds the worker from the
+            // displayed board before it computes anything, so the retry is safe.
+            if (running && backend is ILifeAsyncBackend asyncBackend)
+                asyncBackend.ClearFailure();
+
             // Starting fresh or stopping both drop the old clock state: a pause must not be
             // followed by a burst of generations the clock owed before it was paused, and a
             // resumed run must not wear the paused run's rate or overload warning.
@@ -1550,12 +1578,16 @@ namespace ConwayGameOfLife
 
             Stop();
 
-            if (backend is ILifeAsyncBackend)
+            if (backend is ILifeAsyncBackend asyncBackend)
             {
                 // One generation, computed off the frame. The intent is a flag, and
                 // PumpEvolution both takes over a generation that is already finished (including
                 // one computed before a pause) and issues this one -- in that order, so a single
                 // step can never skip a generation that was already computed.
+                //
+                // An explicit step is also a retry: it clears a standing failure, and the backend
+                // rebuilds the worker from the displayed board before computing.
+                asyncBackend.ClearFailure();
                 singleStepOutstanding = true;
                 RefreshState();
                 return;

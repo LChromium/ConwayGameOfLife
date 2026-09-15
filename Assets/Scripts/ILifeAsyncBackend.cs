@@ -116,7 +116,20 @@ namespace ConwayGameOfLife
         /// <summary>
         /// Why the last computation failed, or null. A worker that throws must be reported:
         /// otherwise the clock would keep asking for generations that never arrive.
+        ///
+        /// <para>Only a failure that belongs to the CURRENT session is reported: a task that threw
+        /// for a board which has since been replaced reclaims its buffer and says nothing, the same
+        /// identity rule a successful result follows. A failure also leaves the worker's state
+        /// untrustworthy (the simulation may have advanced before it threw), so the next submission
+        /// rebuilds from the displayed board.</para>
         /// </summary>
         string FailureMessage { get; }
+
+        /// <summary>
+        /// Forgets a failure so the pipeline can be used again. Called by the explicit actions that
+        /// mean "try again" -- starting the clock, single-stepping, replacing the board -- and by
+        /// nothing else: the interface saying "演算失败" must stay true until somebody acts.
+        /// </summary>
+        void ClearFailure();
     }
 }

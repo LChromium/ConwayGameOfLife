@@ -102,15 +102,25 @@ namespace ConwayGameOfLife
         private readonly Action<Action> schedule;
 
         /// <summary>
-        /// <paramref name="schedule"/> runs one submitted work item; null uses
-        /// <see cref="Task.Run(Action)"/>.
-        ///
-        /// <para>The seam exists so tests can hold a computation in flight and decide exactly when
-        /// it finishes. The questions this class has to answer -- pause, reset, single step,
-        /// backend switch -- are about ORDER, and a real thread turns order into a race; the
-        /// isolation property itself is tested against the real thread pool, where it belongs.</para>
+        /// The rule step itself. Null means <c>LifeSimulation.Step</c>, which is what production
+        /// uses and the only thing that may touch the reference implementation.
         /// </summary>
-        public LifeAsyncCpuBackend(int width, int height, Action<Action> schedule = null)
+        private readonly Action<LifeSimulation> stepRule;
+
+        /// <summary>
+        /// <paramref name="schedule"/> runs one submitted work item; null uses
+        /// <see cref="Task.Run(Action)"/>. <paramref name="stepRule"/> performs the rule step on
+        /// the worker's simulation; null uses <see cref="LifeSimulation.Step"/>.
+        ///
+        /// <para>The two seams exist so tests can hold a computation in flight and decide exactly
+        /// when it finishes, and so a failure can be injected where failures actually happen. The
+        /// questions this class has to answer -- pause, reset, boundary change, backend switch,
+        /// recovery from a failed generation -- are about ORDER and IDENTITY, and a real thread and
+        /// a real out-of-memory turn those into races and coincidences. Neither seam changes what
+        /// production runs: <see cref="LifeSeedingSession"/> takes its generator the same way.</para>
+        /// </summary>
+        public LifeAsyncCpuBackend(
+            int width, int height, Action<Action> schedule = null, Action<LifeSimulation> stepRule = null)
         {
             if (width <= 0 || height <= 0)
                 throw new ArgumentOutOfRangeException(nameof(width), "Grid dimensions must be positive.");
@@ -122,6 +132,7 @@ namespace ConwayGameOfLife
             spare = new byte[cells];
             simulation = new LifeSimulation(width, height);
             this.schedule = schedule ?? (work => Task.Run(work));
+            this.stepRule = stepRule ?? (sim => sim.Step());
         }
 
         /// <summary>
@@ -148,10 +159,16 @@ namespace ConwayGameOfLife
                     if (disposed || wrapEdges == value)
                         return;
 
-                    // The rules changed, so a generation in flight was computed under rules that
-                    // no longer hold. Bumping the version refuses it.
+                    // The RULES changed, so a generation in flight was computed under rules that no
+                    // longer hold -- and so does the worker's simulation, which is why this is not
+                    // just a version bump. Without the rebuild the worker would carry on from a
+                    // board it produced under the old boundary: every result would then be refused
+                    // for not following the displayed generation, and the display would never move
+                    // again while the worker kept computing. Bumping the version refuses what is in
+                    // flight; requiring a rebuild gives the worker a correct starting point.
                     wrapEdges = value;
                     sessionVersion++;
+                    resyncRequired = true;
                 }
             }
         }
@@ -248,6 +265,10 @@ namespace ConwayGameOfLife
         {
             sessionVersion++;
             resyncRequired = true;
+
+            // A replaced board is a fresh start: whatever went wrong with the board that is gone is
+            // no longer the state of this pipeline.
+            failure = null;
         }
 
         // -- evolution ---------------------------------------------------------
@@ -283,6 +304,13 @@ namespace ConwayGameOfLife
                 rebuild = resyncRequired;
                 resyncRequired = false;
                 computing = true;
+
+                // A submission that is actually accepted IS the retry: the failure it replaces has
+                // been acted on. Clearing it here rather than on a timer keeps "the interface says
+                // 演算失败" true for exactly as long as nothing has been tried again, and it cannot
+                // hide a failure nobody has seen, because a failed submission cannot be followed by
+                // another one until the caller asks again.
+                failure = null;
             }
 
             if (rebuild)
@@ -325,7 +353,7 @@ namespace ConwayGameOfLife
                 }
 
                 var stepWatch = Stopwatch.StartNew();
-                simulation.Step();
+                stepRule(simulation);
                 stepWatch.Stop();
                 computeMilliseconds = stepWatch.Elapsed.TotalMilliseconds;
 
@@ -348,8 +376,20 @@ namespace ConwayGameOfLife
                 lock (gate)
                 {
                     computing = false;
+
+                    // The simulation may have advanced before it threw, so the worker's state can no
+                    // longer be trusted to be one generation behind the display. Whatever happens
+                    // next, it rebuilds from the displayed board -- otherwise a retry would carry on
+                    // from a board that is ahead of what the interface shows.
+                    resyncRequired = true;
                     spare = target;
-                    failure = exception.Message;
+
+                    // Success and failure follow the SAME identity rule: a task that belonged to a
+                    // board which has since been replaced (or to a disposed session) reclaims its
+                    // buffer and reports nothing. Clearing the current failure with the death of
+                    // something already superseded was the defect this mirrors from stage B.
+                    if (!disposed && version == sessionVersion)
+                        failure = exception.Message;
                 }
 
                 return;
@@ -429,6 +469,13 @@ namespace ConwayGameOfLife
                     // after the displayed generation. Visible, not silent.
                     refusedGenerations++;
                     spare = board;
+
+                    // The recovery half of the refusal: the worker has to be given a correct
+                    // starting point again. Without it, a refusal for a generation mismatch leaves
+                    // the worker one generation AHEAD of the display, every later result fails the
+                    // same check, and the display never moves again while the worker keeps
+                    // computing -- the shape a boundary change used to produce.
+                    resyncRequired = true;
                     return false;
                 }
 
@@ -454,6 +501,21 @@ namespace ConwayGameOfLife
 
         /// <summary>Cost of the last handover copy made on the main thread when rebuilding.</summary>
         public double LastResyncCopyMilliseconds => lastResyncCopyMilliseconds;
+
+        /// <summary>
+        /// Forgets a failure so the pipeline can be used again. The next submission rebuilds the
+        /// worker's simulation from the displayed board (a failure always leaves that required),
+        /// so a retry never continues from a state that may already be ahead.
+        ///
+        /// <para>Called by the explicit actions that mean "try again": starting the clock, asking
+        /// for a single step, or replacing the board. Nothing clears a failure automatically -- the
+        /// interface saying 演算失败 has to stay true until somebody acts.</para>
+        /// </summary>
+        public void ClearFailure()
+        {
+            lock (gate) { failure = null; }
+        }
+
         public string FailureMessage
         {
             get { lock (gate) { return failure; } }

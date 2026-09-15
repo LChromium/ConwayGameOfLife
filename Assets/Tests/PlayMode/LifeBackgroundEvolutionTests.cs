@@ -181,8 +181,17 @@ namespace ConwayGameOfLife.Tests
                 yield return null;
         }
 
-        private static byte[] RandomBoard(int width, int height, int seed, double density)
+        /// <summary>Turns a 0/1 readback into a board a backend can be loaded with.</summary>
+        private static byte[] CellsToBytes(uint[] cells)
         {
+            var board = new byte[cells.Length];
+            for (int i = 0; i < cells.Length; i++)
+                board[i] = cells[i] != 0 ? (byte)1 : (byte)0;
+
+            return board;
+        }
+
+        private static byte[] RandomBoard(int width, int height, int seed, double density)        {
             var board = new byte[width * height];
             var random = new System.Random(seed);
             for (int i = 0; i < board.Length; i++)
@@ -246,11 +255,21 @@ namespace ConwayGameOfLife.Tests
         /// specimen archive: three live cells, period 2, so a generation changes the shape while the
         /// population stays countable.
         /// </summary>
-        private IEnumerator InstallControllableBackend(ManualScheduler scheduler)
+        private IEnumerator InstallControllableBackend(ManualScheduler scheduler) =>
+            InstallControllableBackend(scheduler, stepRule: null);
+
+        /// <summary>
+        /// The same, with the rule step injected. A failing step is how a worker failure is
+        /// produced on purpose: it happens where failures actually happen (inside the computation),
+        /// and it can be made to throw AFTER advancing the simulation, which is the case a retry
+        /// has to survive.
+        /// </summary>
+        private IEnumerator InstallControllableBackend(ManualScheduler scheduler, Action<LifeSimulation> stepRule)
         {
             LifeTerminalController controller = Controller();
 
-            injected = new LifeAsyncCpuBackend(originalBackend.Width, originalBackend.Height, scheduler.Schedule);
+            injected = new LifeAsyncCpuBackend(
+                originalBackend.Width, originalBackend.Height, scheduler.Schedule, stepRule);
             SetField(controller, "cpuBackend", injected);
 
             DropdownField field = Root().Q<DropdownField>("backend-field");
@@ -857,6 +876,309 @@ namespace ConwayGameOfLife.Tests
 
             StopClock(controller);
             yield return null;
+        }
+
+        // -- a boundary change is a rule change: refuse, then rebuild -----------
+
+        /// <summary>
+        /// A boundary change while a generation is in flight. The result belongs to the old rule and
+        /// must be refused -- but refusing alone is not enough: the worker's simulation is then one
+        /// generation ahead of the display under the WRONG rule, so unless it is rebuilt from the
+        /// displayed board every later result fails the same check and the display never moves
+        /// again. This test pins both halves.
+        /// </summary>
+        [Test]
+        public void BoundaryChangeWhileComputing_RefusesTheOldResult_AndRebuildsUnderTheNewRule()
+        {
+            var scheduler = new ManualScheduler();
+            var backend = new LifeAsyncCpuBackend(8, 8, scheduler.Schedule);
+            try
+            {
+                byte[] board = EdgeBlinker();
+                backend.WrapEdges = true;
+                backend.LoadBoard(board);
+
+                backend.Step();
+                Assert.IsTrue(backend.IsComputing, "the step should be in flight");
+
+                // The user switches the boundary while that generation is being computed.
+                backend.WrapEdges = false;
+
+                scheduler.RunPending();
+                Assert.IsTrue(backend.HasCompletedGeneration, "the old-rule generation finished");
+                Assert.IsFalse(backend.TryAdoptCompletedGeneration(out _),
+                    "a generation computed under the old boundary must not be adopted");
+                Assert.AreEqual(1, backend.RefusedGenerations, "the refusal must be counted");
+                Assert.AreEqual(0, backend.Generation, "the display keeps the generation it had");
+
+                AssertNextGenerationMatchesTheReference(backend, scheduler, board, wrapEdges: false);
+            }
+            finally
+            {
+                backend.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// The same shape, with the result already finished and waiting when the boundary changes:
+        /// it is refused, the worker is rebuilt, and the next generation is the new rule's answer
+        /// for the DISPLAYED board -- generation 1, not the old board's next number.
+        /// </summary>
+        [Test]
+        public void BoundaryChangeWithAWaitingResult_RefusesIt_AndRebuildsUnderTheNewRule()
+        {
+            var scheduler = new ManualScheduler();
+            var backend = new LifeAsyncCpuBackend(8, 8, scheduler.Schedule);
+            try
+            {
+                byte[] board = EdgeBlinker();
+                backend.WrapEdges = true;
+                backend.LoadBoard(board);
+
+                backend.Step();
+                scheduler.RunPending();
+                Assert.IsTrue(backend.HasCompletedGeneration, "the generation should be waiting");
+
+                backend.WrapEdges = false;
+
+                Assert.IsFalse(backend.TryAdoptCompletedGeneration(out _),
+                    "a waiting generation computed under the old boundary must not be adopted");
+                Assert.AreEqual(1, backend.RefusedGenerations);
+                Assert.AreEqual(0, backend.Generation);
+
+                AssertNextGenerationMatchesTheReference(backend, scheduler, board, wrapEdges: false);
+            }
+            finally
+            {
+                backend.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Submits one generation, adopts it, and checks it is cell-identical with a synchronous
+        /// reference run under the given boundary -- which also pins that the worker was rebuilt
+        /// from the displayed board (the outcome reports the rebuild) rather than carrying on from
+        /// its own, possibly diverged, state.
+        /// </summary>
+        private static void AssertNextGenerationMatchesTheReference(
+            LifeAsyncCpuBackend backend, ManualScheduler scheduler, byte[] displayedBoard, bool wrapEdges)
+        {
+            backend.Step();
+            Assert.IsTrue(scheduler.HasPending, "the generation after the refusal should be submitted");
+            scheduler.RunPending();
+
+            Assert.IsTrue(backend.HasCompletedGeneration, "the generation after the rebuild should be complete");
+            Assert.IsTrue(backend.TryAdoptCompletedGeneration(out LifeStepOutcome outcome),
+                "the generation after the rebuild should be adopted");
+            Assert.AreEqual(1, outcome.Generation,
+                "the rebuilt generation must follow the displayed one, not the worker's own count");
+            Assert.Greater(outcome.BoardLoadMilliseconds, 0.0,
+                "the worker must have been rebuilt from the displayed board, not continued");
+
+            using var reference = new CpuLifeBackend(8, 8);
+            reference.WrapEdges = wrapEdges;
+            reference.LoadBoard(displayedBoard);
+            reference.Step();
+
+            uint[] expected = ReadCells(reference);
+            uint[] adopted = ReadCells(backend);
+            Assert.IsTrue(adopted.AsSpan().SequenceEqual(expected),
+                "the generation after the rebuild is not the reference answer under the new boundary");
+
+            // And the two boundaries really do differ on this board, so the test above is not
+            // vacuous: if they agreed, refusing the old result would have proved nothing.
+            using var otherRule = new CpuLifeBackend(8, 8);
+            otherRule.WrapEdges = !wrapEdges;
+            otherRule.LoadBoard(displayedBoard);
+            otherRule.Step();
+            Assert.IsFalse(expected.AsSpan().SequenceEqual(ReadCells(otherRule)),
+                "the two boundaries evolve this board identically, so the test would be vacuous");
+        }
+
+        /// <summary>
+        /// Three live cells on the top row of an 8x8 board. Wrapping makes the row above them alive
+        /// as well, so the wrapping and fixed answers differ -- which is what makes a boundary
+        /// change observable at all.
+        /// </summary>
+        private static byte[] EdgeBlinker()
+        {
+            var board = new byte[8 * 8];
+            board[0] = 1;
+            board[1] = 1;
+            board[2] = 1;
+            return board;
+        }
+
+        // -- failure: same identity rule as success ----------------------------
+
+        /// <summary>
+        /// A failure that belongs to the current session stops the automatic submission: the display
+        /// keeps the last complete generation, the clock stops, the readout says so, and nothing is
+        /// submitted again until somebody acts.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator Failure_StopsTheClockAndKeepsTheLastCompleteGeneration()
+        {
+            LifeTerminalController controller = Controller();
+            var scheduler = new ManualScheduler();
+            int calls = 0;
+
+            // The rule advances the simulation and THEN throws: the worker's state is already ahead,
+            // which is exactly the case a naive retry would continue from.
+            yield return InstallControllableBackend(scheduler, simulation =>
+            {
+                calls++;
+                simulation.Step();
+                throw new InvalidOperationException("injected rule failure");
+            });
+
+            SetSpeed(controller, 20);
+            PressButton(RunButtonText);
+            yield return WaitFor(() => scheduler.HasPending, 30, "the clock to submit a generation");
+
+            scheduler.RunPending();
+            yield return WaitFor(() => injected.FailureMessage != null, 10, "the failure to be reported");
+
+            Assert.AreEqual(1, calls, "the injected rule should have run once");
+            Assert.IsFalse(ReadField<bool>(controller, "running"),
+                "a failed generation must stop the clock instead of submitting more work");
+            Assert.AreEqual(0, injected.Generation, "the display keeps the last complete generation");
+            Assert.AreEqual("演算失败", StateText(), "the readout must say the run failed");
+
+            int submissions = scheduler.SubmitCount;
+            yield return Frames(20);
+
+            Assert.AreEqual(submissions, scheduler.SubmitCount,
+                "the failed pipeline kept submitting on its own");
+            Assert.AreEqual(1, calls, "the injected rule ran again after failing");
+            Assert.AreEqual(0, injected.Generation, "a generation was displayed by a failed pipeline");
+
+            StopClock(controller);
+            yield return null;
+        }
+
+        /// <summary>
+        /// The retry: starting the clock again clears the failure, and the backend rebuilds the
+        /// worker from the DISPLAYED board before computing -- so the generation that lands follows
+        /// the display, even though the failed attempt had already advanced its own simulation.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator RetryAfterAFailure_RebuildsFromTheDisplayBoard_AndKeepsTheNumbering()
+        {
+            LifeTerminalController controller = Controller();
+            var scheduler = new ManualScheduler();
+            int calls = 0;
+
+            yield return InstallControllableBackend(scheduler, simulation =>
+            {
+                calls++;
+                if (calls == 1)
+                {
+                    simulation.Step();
+                    throw new InvalidOperationException("injected rule failure");
+                }
+
+                simulation.Step();
+            });
+
+            uint[] displayed = ReadCells(injected);
+
+            SetSpeed(controller, 20);
+            PressButton(RunButtonText);
+            yield return WaitFor(() => scheduler.HasPending, 30, "the clock to submit a generation");
+            scheduler.RunPending();
+            yield return WaitFor(() => injected.FailureMessage != null, 10, "the failure to be reported");
+
+            // Retry through the real control.
+            PressButton(RunButtonText);
+            Assert.IsTrue(ReadField<bool>(controller, "running"), "the play button did not restart the clock");
+            yield return WaitFor(() => scheduler.HasPending, 30, "the retry to submit a generation");
+
+            scheduler.RunPending();
+            yield return WaitFor(() => injected.Generation == 1, 20, "the retry to land");
+
+            Assert.IsNull(injected.FailureMessage, "the retry did not clear the failure");
+            Assert.IsTrue(StateText().StartsWith("演算中"),
+                $"the readout did not recover from the failure, got '{StateText()}'");
+
+            using var reference = new CpuLifeBackend(injected.Width, injected.Height);
+            reference.WrapEdges = injected.WrapEdges;
+            reference.LoadBoard(CellsToBytes(displayed));
+            reference.Step();
+
+            uint[] expected = ReadCells(reference);
+            uint[] adopted = ReadCells(injected);
+            Assert.IsTrue(adopted.AsSpan().SequenceEqual(expected),
+                "the retry continued from the failed worker's own board instead of the displayed one");
+
+            StopClock(controller);
+            yield return null;
+        }
+
+        /// <summary>
+        /// A failure that belongs to a board which has since been replaced is refused by session
+        /// identity, exactly like a stale success: it reports nothing, reclaims its buffer, and does
+        /// not leave the pipeline blocked.
+        ///
+        /// <para>A plain test, not a UnityTest: the held scheduler runs the computation on this
+        /// thread, so the whole sequence is synchronous and needs no frames.</para>
+        /// </summary>
+        [Test]
+        public void StaleFailure_DoesNotPolluteTheReplacedBoard()
+        {
+            var scheduler = new ManualScheduler();
+            int calls = 0;
+            var backend = new LifeAsyncCpuBackend(8, 8, scheduler.Schedule, simulation =>
+            {
+                calls++;
+                if (calls == 1)
+                    throw new InvalidOperationException("injected rule failure");
+
+                simulation.Step();
+            });
+
+            try
+            {
+                backend.WrapEdges = true;
+                backend.LoadBoard(EdgeBlinker());
+                backend.Step();
+                Assert.IsTrue(backend.IsComputing, "the failing step should be in flight");
+
+                // The board is replaced while that generation is being computed.
+                byte[] replacement = RandomBoard(8, 8, seed: 4, density: 0.25);
+                backend.LoadBoard(replacement);
+                Assert.AreEqual(0, backend.Generation, "loading a board resets the displayed generation");
+
+                scheduler.RunPending();
+
+                Assert.IsNull(backend.FailureMessage,
+                    "a failure from a replaced board polluted the current session");
+                Assert.IsFalse(backend.HasCompletedGeneration, "a failed task publishes nothing");
+
+                // The pipeline is usable: the next submission runs and lands as generation 1.
+                int submissions = scheduler.SubmitCount;
+                backend.Step();
+                Assert.AreEqual(submissions + 1, scheduler.SubmitCount,
+                    "the stale failure left the pipeline blocked");
+                scheduler.RunPending();
+
+                Assert.IsTrue(backend.TryAdoptCompletedGeneration(out LifeStepOutcome outcome),
+                    "the generation after a stale failure should be adoptable");
+                Assert.AreEqual(1, outcome.Generation);
+
+                using var reference = new CpuLifeBackend(8, 8);
+                reference.WrapEdges = true;
+                reference.LoadBoard(replacement);
+                reference.Step();
+                uint[] expected = ReadCells(reference);
+                uint[] adopted = ReadCells(backend);
+                Assert.IsTrue(adopted.AsSpan().SequenceEqual(expected),
+                    "the board after a stale failure is not the reference answer");
+            }
+            finally
+            {
+                backend.Dispose();
+            }
         }
     }
 }
