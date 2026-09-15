@@ -40,6 +40,8 @@ namespace ConwayGameOfLife
         private LifeBoardRenderer renderer;
         private uint[] uploadCells;
         private uint[] probeCells;
+        private uint[] previewScratch;
+        private bool previewActive;
         private bool uploadPending = true;
         private float panelScale = 1f;
 
@@ -148,7 +150,7 @@ namespace ConwayGameOfLife
             if (state == null)
                 return;
 
-            renderer.Render(state, originX, originY, cellPixels, decorations: true);
+            renderer.Render(state, originX, originY, cellPixels, decorations: true, preview: previewActive);
 
             Background background = Background.FromRenderTexture(renderer.Target);
             style.backgroundImage = new StyleBackground(background);
@@ -170,6 +172,15 @@ namespace ConwayGameOfLife
         /// </summary>
         private ComputeBuffer ResolveStateBuffer()
         {
+            if (previewActive)
+            {
+                // The upload buffer already holds the candidate, written by
+                // ShowPreview. The backend is deliberately not consulted, so a
+                // preview cannot disturb the real board.
+                LastUploadMilliseconds = 0f;
+                return renderer.UploadBuffer;
+            }
+
             if (backend is GpuLifeBackend gpu)
             {
                 // Nothing to upload: the display kernel reads the backend's own
@@ -207,6 +218,54 @@ namespace ConwayGameOfLife
             uploadPending = true;
             Refresh();
         }
+
+        // -- seeding preview ---------------------------------------------------
+
+        /// <summary>
+        /// Shows a candidate board without touching the backend at all: the cells go
+        /// into the renderer's own upload buffer and the pass runs in the preview
+        /// colour. This is what makes "adjust parameters, then decide" safe -- the
+        /// real board, its generation counter and its population are all untouched
+        /// until the candidate is applied.
+        /// </summary>
+        public void ShowPreview(ReadOnlySpan<byte> cells, int width, int height)
+        {
+            if (renderer == null || backend == null)
+                return;
+            if (width != backend.Width || height != backend.Height)
+                return;
+            if (cells.Length < width * height)
+                return;
+
+            int count = width * height;
+            if (previewScratch == null || previewScratch.Length != count)
+                previewScratch = new uint[count];
+
+            for (int i = 0; i < count; i++)
+                previewScratch[i] = cells[i] != 0 ? 1u : 0u;
+
+            renderer.EnsureBoard(width, height);
+            renderer.Upload(previewScratch);
+
+            previewActive = true;
+            Refresh();
+        }
+
+        /// <summary>Drops the candidate and goes back to showing the real board.</summary>
+        public void ClearPreview()
+        {
+            if (!previewActive)
+                return;
+
+            previewActive = false;
+
+            // The CPU path has to re-upload the real board; the upload buffer
+            // currently holds the discarded candidate.
+            uploadPending = true;
+            Refresh();
+        }
+
+        public bool PreviewActive => previewActive;
 
         // -- view transform ----------------------------------------------------
 

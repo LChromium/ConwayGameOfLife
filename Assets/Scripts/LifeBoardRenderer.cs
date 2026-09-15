@@ -25,6 +25,12 @@ namespace ConwayGameOfLife
         private static readonly Color CellColor = new(0.62f, 0.76f, 0.65f);
         private static readonly Color BorderColor = new(0.80f, 0.82f, 0.60f);
 
+        /// <summary>
+        /// Live cells while a seeding candidate is on screen. A restrained amber, so a
+        /// candidate can never be mistaken for the confirmed board.
+        /// </summary>
+        private static readonly Color PreviewCellColor = new(0.84f, 0.70f, 0.42f);
+
         private const int ThreadGroupSize = GpuLifeBackend.ThreadGroupSize;
 
         private readonly ComputeShader shader;
@@ -137,8 +143,10 @@ namespace ConwayGameOfLife
         /// <summary>
         /// Renders the current state. <paramref name="cellPixels"/> is clamped to
         /// at least 1 so a cell never shrinks below one screen pixel.
+        /// <paramref name="preview"/> swaps the live-cell colour for the candidate
+        /// amber; it changes nothing else about the pass.
         /// </summary>
-        public void Render(ComputeBuffer state, int originX, int originY, int cellPixels, bool decorations)
+        public void Render(ComputeBuffer state, int originX, int originY, int cellPixels, bool decorations, bool preview)
         {
             if (target == null || state == null)
                 return;
@@ -154,7 +162,7 @@ namespace ConwayGameOfLife
 
             shader.SetVector("_ScreenColor", ToLinear(ScreenColor));
             shader.SetVector("_GridColor", ToLinear(GridColor));
-            shader.SetVector("_CellColor", ToLinear(CellColor));
+            shader.SetVector("_CellColor", ToLinear(preview ? PreviewCellColor : CellColor));
             shader.SetVector("_BorderColor", ToLinear(BorderColor));
 
             shader.SetBuffer(renderKernel, "_StateIn", state);

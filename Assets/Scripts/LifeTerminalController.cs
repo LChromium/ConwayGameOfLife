@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -55,6 +56,9 @@ namespace ConwayGameOfLife
         private byte[] initialState;
         private string initialLabel = string.Empty;
 
+        /// <summary>Stage-B seeding state. Editing it only ever changes a candidate.</summary>
+        public LifeSeedingSession Seeding { get; private set; }
+
         private LifeGridElement grid;
         private Label generationLabel;
         private Label populationLabel;
@@ -86,6 +90,7 @@ namespace ConwayGameOfLife
             Application.targetFrameRate = 120;
 
             ReadBoardSizeFromCommandLine();
+            Seeding = new LifeSeedingSession(gridWidth, gridHeight);
 
             if (LifeBoardRenderer.TryCreate(out renderer, out string rendererError))
             {
@@ -137,6 +142,8 @@ namespace ConwayGameOfLife
             grid.SetInitialZoom(ReadIntFromCommandLine("-lifeZoom"));
             grid.CenterView();
 
+            ApplySeedingFromCommandLine();
+
             // "-lifeRun" starts the clock, so a captured Player frame shows a board
             // that has actually evolved on the GPU rather than generation 0.
             if (HasFlag("-lifeRun"))
@@ -169,6 +176,127 @@ namespace ConwayGameOfLife
             }
 
             return 0;
+        }
+
+        private static int ReadIntFromCommandLine(string name, int fallback)
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == name && int.TryParse(args[i + 1], out int value))
+                    return value;
+            }
+
+            return fallback;
+        }
+
+        private static float ReadFloatFromCommandLine(string name, float fallback)
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == name
+                    && float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+                {
+                    return value;
+                }
+            }
+
+            return fallback;
+        }
+
+        // -- stage B seeding ---------------------------------------------------
+
+        /// <summary>
+        /// Optional command-line seeding, so evidence captures and smoke runs do not
+        /// depend on driving the panel. "-lifeSeedApply" confirms the candidate;
+        /// "-lifeSeedPreview" only puts it on screen.
+        /// </summary>
+        private void ApplySeedingFromCommandLine()
+        {
+            LifeNoiseParameters defaults = Seeding.Parameters;
+
+            bool requested =
+                HasFlag("-lifeSeedApply") || HasFlag("-lifeSeedPreview") ||
+                HasFlag("-lifeSeed") || HasFlag("-lifeSeedUniform") ||
+                HasFlag("-lifeDensity") || HasFlag("-lifeScale") ||
+                HasFlag("-lifeWarp") || HasFlag("-lifeCluster");
+
+            if (!requested)
+                return;
+
+            var parameters = new LifeNoiseParameters(
+                HasFlag("-lifeSeedUniform") ? LifeSeedingMode.Uniform : defaults.Mode,
+                ReadIntFromCommandLine("-lifeSeed", defaults.Seed),
+                ReadFloatFromCommandLine("-lifeDensity", defaults.Density),
+                ReadFloatFromCommandLine("-lifeScale", defaults.Scale),
+                ReadFloatFromCommandLine("-lifeWarp", defaults.WarpStrength),
+                ReadFloatFromCommandLine("-lifeCluster", defaults.ClusterStrength));
+
+            Seeding.SetParameters(parameters);
+
+            if (HasFlag("-lifeSeedApply"))
+                ApplySeeding();
+            else if (HasFlag("-lifeSeedPreview"))
+                PreviewSeeding();
+        }
+
+        /// <summary>
+        /// Generates a candidate and puts it on screen in the preview colour. The real
+        /// board is not touched: the candidate goes into the display path only.
+        /// </summary>
+        public void PreviewSeeding()
+        {
+            Stop();
+
+            if (!Seeding.GenerateCandidate())
+                return;
+
+            LogSeedingCost("preview");
+            grid.ShowPreview(Seeding.Candidate, gridWidth, gridHeight);
+            sampleLabel.text = $"预览（未应用）/ {Seeding.Parameters}";
+            RefreshReadouts();
+        }
+
+        /// <summary>
+        /// Confirms the candidate: it becomes the experiment's initial state, the
+        /// generation counter goes back to zero, and the clock stays paused.
+        /// </summary>
+        public void ApplySeeding()
+        {
+            if (!Seeding.HasCandidate && !Seeding.GenerateCandidate())
+                return;
+
+            LogSeedingCost("apply");
+            byte[] board = Seeding.Apply();
+            grid.ClearPreview();
+
+            CaptureInitialState(board, $"播种 / {Seeding.AppliedParameters}");
+            Restart();
+        }
+
+        /// <summary>
+        /// Generating a large board on the CPU is not free, so the cost is reported
+        /// rather than left implicit. Shown as the realised density too: the base
+        /// density is a probability, not a population promise.
+        /// </summary>
+        private void LogSeedingCost(string what)
+        {
+            Debug.Log($"[Life] seeding {what}: {Seeding.LastGenerationMilliseconds:F1} ms for " +
+                      $"{gridWidth}x{gridHeight} ({Seeding.CandidateAliveCount} alive, " +
+                      $"realised density {Seeding.CandidateDensity:F4}) -- {Seeding.Parameters}");
+        }
+
+        /// <summary>Throws the candidate away. The board was never moved, so there is nothing to restore.</summary>
+        public void CancelSeeding()
+        {
+            if (!Seeding.HasCandidate)
+                return;
+
+            Seeding.Cancel();
+            grid.ClearPreview();
+            sampleLabel.text = initialLabel;
+            RefreshReadouts();
         }
 
         private void OnDestroy()
@@ -537,16 +665,18 @@ namespace ConwayGameOfLife
 
         private void Randomize()
         {
-            // One board is produced here and handed to whichever backend is live,
-            // so both backends would evolve the identical state.
-            byte[] board = new byte[gridWidth * gridHeight];
-            System.Random random = new();
-            for (int i = 0; i < board.Length; i++)
-                board[i] = random.NextDouble() < 0.22 ? (byte)1 : (byte)0;
+            // Routed through the seeding session so there is one random path, not two.
+            // Uniform mode with the same hash as the fBm path, so it is the control
+            // group the brief asks for and it is reproducible from its seed.
+            Stop();
+            Seeding.SetParameters(new LifeNoiseParameters(
+                LifeSeedingMode.Uniform, Environment.TickCount, 0.22f, 48f, 0f, 0f));
+            Seeding.GenerateCandidate();
 
-            CaptureInitialState(board, "自由样本 / 随机播种");
+            byte[] board = Seeding.Apply();
+            CaptureInitialState(board, $"播种 / 均匀随机 seed {Seeding.AppliedParameters.Seed}");
             Restart();
-            SelectCustom();
+            SelectCustom(initialLabel);
         }
 
         private void Clear()
@@ -554,7 +684,7 @@ namespace ConwayGameOfLife
             byte[] board = new byte[gridWidth * gridHeight];
             CaptureInitialState(board, "自由样本 / 空白");
             Restart();
-            SelectCustom();
+            SelectCustom("自由样本 / 空白");
         }
 
         /// <summary>
@@ -584,6 +714,11 @@ namespace ConwayGameOfLife
         {
             initialState = board;
             initialLabel = label;
+
+            // The seeding parameters only describe the board while that board is the
+            // one they produced. Loading a specimen or clearing makes them stale.
+            if (Seeding != null && !label.StartsWith("播种", StringComparison.Ordinal))
+                Seeding.ForgetApplied();
         }
 
         private void Restart()
@@ -618,12 +753,12 @@ namespace ConwayGameOfLife
         private void OnGridEdited()
         {
             Stop();
-            SelectCustom();
+            SelectCustom("自由样本 / 手动编辑");
         }
 
-        private void SelectCustom()
+        private void SelectCustom(string label)
         {
-            sampleLabel.text = "自由样本 / 手动编辑";
+            sampleLabel.text = label;
             for (int i = 0; i < presetButtons.Length; i++)
                 presetButtons[i].RemoveFromClassList("selected");
             grid.MarkBoardDirty();

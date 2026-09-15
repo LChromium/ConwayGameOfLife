@@ -132,6 +132,45 @@ namespace ConwayGameOfLife.Tests
         // -- the noise has to do something -------------------------------------
 
         [Test]
+        public void At1024_ClusteringIsMeasurableInTheGeneratedBoard()
+        {
+            // The quantified clustering claim lives here, on the generated data,
+            // rather than on a screenshot. Screen-scraping was tried and abandoned:
+            // classifying board pixels against UI chrome is fragile and twice
+            // matched the panel colours instead of the board.
+            const int size = 1024;
+            const int blockSize = 32;
+
+            var uniform = new byte[size * size];
+            LifeNoiseSeeding.Generate(
+                new LifeNoiseParameters(LifeSeedingMode.Uniform, 20260915, 0.32f, 60f, 0f, 0f),
+                size, size, uniform);
+
+            var clustered = new byte[size * size];
+            LifeNoiseSeeding.Generate(
+                new LifeNoiseParameters(LifeSeedingMode.Fbm, 20260915, 0.32f, 60f, 10f, 0.7f),
+                size, size, clustered);
+
+            float uniformSpread = BlockDensitySpread(uniform, size, size, blockSize);
+            float clusteredSpread = BlockDensitySpread(clustered, size, size, blockSize);
+
+            float uniformDensity = LifeNoiseSeeding.MeasureDensity(uniform);
+            float clusteredDensity = LifeNoiseSeeding.MeasureDensity(clustered);
+
+            TestContext.WriteLine(
+                $"[stage-b] 1024x1024 seeding, block {blockSize}: " +
+                $"uniform density {uniformDensity:0.0000} spread {uniformSpread:0.0000}; " +
+                $"fBm density {clusteredDensity:0.0000} spread {clusteredSpread:0.0000}; " +
+                $"ratio {clusteredSpread / uniformSpread:0.00}x");
+
+            Assert.That(clusteredSpread, Is.GreaterThan(uniformSpread * 2f),
+                $"at 1024 the fBm board should vary in density far more than uniform: " +
+                $"uniform {uniformSpread:0.0000}, fBm {clusteredSpread:0.0000}");
+            Assert.That(Math.Abs(clusteredDensity - 0.32f), Is.LessThan(0.02f),
+                "the realised density should still land near the base probability");
+        }
+
+        [Test]
         public void ClusterStrengthAboveZero_ClustersMoreThanUniform()
         {
             // Measured as the spread of density across blocks, which is what clustering
@@ -246,24 +285,27 @@ namespace ConwayGameOfLife.Tests
 
         // -- helpers ------------------------------------------------------------
 
+        private static float BlockDensitySpread(byte[] board, int blockSize) =>
+            BlockDensitySpread(board, Width, Height, blockSize);
+
         /// <summary>
-        /// Standard deviation of the density measured over <paramref name="blockSize"/>
-        /// square blocks. Uniform seeding gives the binomial spread
-        /// sqrt(d(1-d)/n); spatial clustering pushes it well above that.
+        /// Standard deviation of the density measured over square blocks of
+        /// <paramref name="blockSize"/> cells. Uniform seeding gives the binomial
+        /// spread sqrt(d(1-d)/n); spatial clustering pushes it well above that.
         /// </summary>
-        private static float BlockDensitySpread(byte[] board, int blockSize)
+        private static float BlockDensitySpread(byte[] board, int width, int height, int blockSize)
         {
             var densities = new System.Collections.Generic.List<float>();
 
-            for (int blockY = 0; blockY + blockSize <= Height; blockY += blockSize)
+            for (int blockY = 0; blockY + blockSize <= height; blockY += blockSize)
             {
-                for (int blockX = 0; blockX + blockSize <= Width; blockX += blockSize)
+                for (int blockX = 0; blockX + blockSize <= width; blockX += blockSize)
                 {
                     int alive = 0;
                     for (int y = 0; y < blockSize; y++)
                     {
                         for (int x = 0; x < blockSize; x++)
-                            alive += board[(blockY + y) * Width + blockX + x] != 0 ? 1 : 0;
+                            alive += board[(blockY + y) * width + blockX + x] != 0 ? 1 : 0;
                     }
 
                     densities.Add((float)alive / (blockSize * blockSize));
