@@ -82,8 +82,12 @@ namespace ConwayGameOfLife.Tests
         /// <summary>
         /// A generator that blocks each seed until the test releases it, so "a task is
         /// still running" and "that old task finally finished" become observable states
-        /// rather than a race against the machine's speed. Seeds listed at construction
-        /// throw instead of producing a board.
+        /// rather than a race against the machine's speed.
+        ///
+        /// <para>A seed listed at construction throws on its <b>first</b> run and generates
+        /// normally afterwards. Failing every run would make "the replacement was served by
+        /// its own generation" impossible to observe: the replacement would fail too, and
+        /// for the right reason.</para>
         /// </summary>
         private sealed class GatedGenerator
         {
@@ -99,12 +103,12 @@ namespace ConwayGameOfLife.Tests
 
             public void Run(LifeNoiseParameters parameters, int width, int height, byte[] destination)
             {
-                runs.AddOrUpdate(parameters.Seed, 1, (_, count) => count + 1);
+                int run = runs.AddOrUpdate(parameters.Seed, 1, (_, count) => count + 1);
 
                 gates.GetOrAdd(parameters.Seed, _ => new ManualResetEventSlim(false))
                     .Wait(TimeSpan.FromSeconds(PumpTimeoutSeconds));
 
-                if (failingSeeds.Contains(parameters.Seed))
+                if (failingSeeds.Contains(parameters.Seed) && run == 1)
                 {
                     Interlocked.Increment(ref failures);
                     throw new InvalidOperationException($"deliberate failure for seed {parameters.Seed}");
@@ -118,6 +122,14 @@ namespace ConwayGameOfLife.Tests
                 gates.GetOrAdd(seed, _ => new ManualResetEventSlim(false)).Set();
 
             public bool Started(int seed) => runs.ContainsKey(seed);
+
+            /// <summary>
+            /// How many times a seed has been generated. This is how "the session computed a
+            /// board of its own instead of using the abandoned one" becomes observable: two
+            /// runs of the same parameters produce identical boards, so comparing content
+            /// could never tell them apart.
+            /// </summary>
+            public int RunCount(int seed) => runs.TryGetValue(seed, out int count) ? count : 0;
         }
 
         [Test]
@@ -452,6 +464,118 @@ namespace ConwayGameOfLife.Tests
 
             Assert.AreEqual(2, session.CandidateParameters.Seed,
                 "the replacement must be the one that lands");
+            Assert.IsFalse(session.IsGenerating);
+            Assert.IsFalse(session.CandidateIsStale);
+        }
+
+        // -- cancel does not change the parameters, so content cannot settle these ------
+
+        [Test]
+        public void Cancel_ThenTheAbandonedTaskFails_ReportsNothing()
+        {
+            // Cancelling leaves the parameters exactly as they were, so a content comparison
+            // would let the abandoned task's failure straight through: the panel would
+            // announce "生成失败" for a request the user had already withdrawn. Only the
+            // request identity can refuse it.
+            var generator = new GatedGenerator(4);
+            LifeSeedingSession session = new(Width, Height, generator.Run);
+
+            session.SetParameters(Fbm(seed: 4));
+            session.RequestCandidate();
+            WaitFor(() => generator.Started(4), "the generation to start");
+
+            session.Cancel();
+            Assert.IsTrue(session.IsWorking, "the abandoned task must still be running for this to mean anything");
+
+            generator.Release(4);
+            WaitFor(() => !session.IsWorking, "the abandoned task to finish");
+
+            for (int i = 0; i < 10; i++)
+            {
+                Assert.IsFalse(session.PumpGeneration(), "a withdrawn request must not adopt anything");
+                Assert.IsFalse(session.IsGenerating, "a withdrawn request is not waiting for anything");
+                Assert.IsNull(session.FailureMessage, "a withdrawn request cannot fail");
+                Thread.Sleep(2);
+            }
+
+            Assert.IsFalse(session.HasCandidate);
+        }
+
+        [Test]
+        public void Cancel_ThenAnIdenticalRequest_IsNotCancelledByTheAbandonedFailure()
+        {
+            // The user cancels and immediately asks for the same parameters again. Both
+            // requests carry identical content, so this is the case that only identity can
+            // get right: the abandoned task's failure belongs to the request that is over.
+            var generator = new GatedGenerator(6);
+            LifeSeedingSession session = new(Width, Height, generator.Run);
+
+            session.SetParameters(Fbm(seed: 6));
+            session.RequestCandidate();
+            WaitFor(() => generator.Started(6), "the first generation to start");
+
+            session.Cancel();
+
+            // The new request has to be issued BEFORE the abandoned task is let go:
+            // otherwise this test would be about the state after it finished, not about
+            // what its failure is allowed to touch.
+            Assert.IsTrue(session.IsWorking, "the abandoned task must still be running when the new request goes out");
+            session.RequestCandidate();
+            Assert.IsTrue(session.HasPendingRequest, "the identical request must be outstanding");
+            Assert.AreEqual(1, generator.RunCount(6), "a busy worker must not be handed a second task");
+
+            generator.Release(6);
+
+            // The abandoned task fails and the replacement is started in its place. No pump
+            // happens here on purpose: a request can only be consumed by the main-thread
+            // pump, so "still outstanding" is a stable state to assert.
+            WaitFor(() => generator.RunCount(6) == 2, "the new request to start its own board");
+
+            Assert.IsTrue(session.HasPendingRequest, "the new request must survive the abandoned failure");
+            Assert.IsNull(session.FailureMessage, "the abandoned failure belongs to a request that is over");
+
+            PumpUntil(session, () => session.HasCandidate, "the new request's candidate");
+            Assert.AreEqual(6, session.CandidateParameters.Seed);
+            Assert.IsFalse(session.IsGenerating);
+        }
+
+        [Test]
+        public void Cancel_ThenAnIdenticalRequest_DoesNotAdoptTheAbandonedSuccess()
+        {
+            // The success side of the same rule. The abandoned task produces exactly the
+            // board the new request is asking for, and it still may not be used: the new
+            // request runs its own generation. Two runs of identical parameters produce
+            // identical boards, so the run count is what makes this observable.
+            var generator = new GatedGenerator();
+            LifeSeedingSession session = new(Width, Height, generator.Run);
+
+            session.SetParameters(Fbm(seed: 12));
+            session.RequestCandidate();
+            WaitFor(() => generator.Started(12), "the first generation to start");
+
+            session.Cancel();
+            Assert.IsTrue(session.IsWorking, "the abandoned task must still be running when the new request goes out");
+            session.RequestCandidate();
+            Assert.AreEqual(1, generator.RunCount(12));
+
+            generator.Release(12);
+
+            // Let the abandoned task finish. Nothing can be adopted without a pump, so the
+            // state is stable here and the next single pump is the one that decides.
+            WaitFor(() => !session.IsWorking, "the abandoned task to finish");
+            Assert.IsFalse(session.HasCandidate, "the abandoned result must not be adopted on its own");
+
+            session.PumpGeneration();
+
+            // That pump saw a finished result which belongs to a request that is over: it had
+            // to refuse it and ask for a fresh generation instead.
+            Assert.IsFalse(session.HasCandidate, "the abandoned result must not be adopted by the new request");
+
+            WaitFor(() => generator.RunCount(12) == 2, "the new request to start its own board");
+            Assert.IsFalse(session.HasCandidate, "the abandoned board must not be displayed");
+
+            PumpUntil(session, () => session.HasCandidate, "the new request's candidate");
+            Assert.AreEqual(12, session.CandidateParameters.Seed);
             Assert.IsFalse(session.IsGenerating);
             Assert.IsFalse(session.CandidateIsStale);
         }

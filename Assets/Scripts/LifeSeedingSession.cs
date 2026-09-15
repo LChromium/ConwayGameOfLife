@@ -63,10 +63,20 @@ namespace ConwayGameOfLife
 
         // The pipeline. "wantCandidate" is the user's intent, "requestPending" is an
         // issued-and-unanswered request, "working" is a task actually running.
+        //
+        // Two independent questions are asked of every finished or failed task:
+        //   * requestVersion -- is this still the request that matters? (identity)
+        //   * the parameter snapshot -- does what it produced describe the controls? (content)
+        // Both have to agree. Identity is what covers cancel, dispose and supersession:
+        // those do not necessarily change the parameters, so content alone would let a
+        // task that was abandoned -- or replaced by an identical request -- decide the
+        // current state.
+        private int requestVersion;
         private bool wantCandidate;
         private bool requestPending;
         private bool working;
         private bool finishedReady;
+        private int finishedVersion;
         private int finishedAlive;
         private double finishedMilliseconds;
         private LifeNoiseParameters finishedParameters;
@@ -226,11 +236,13 @@ namespace ConwayGameOfLife
 
                 this.parameters = parameters;
 
-                // Immediate invalidation. The task may still be running; whatever it
-                // produces describes parameters the controls have already left behind,
-                // so it is refused on arrival rather than uploaded a frame later.
+                // Immediate invalidation, identity included. The task may still be running;
+                // whatever it produces describes parameters the controls have already left
+                // behind, so it is refused on arrival rather than uploaded a frame later --
+                // and so is its failure.
                 requestPending = false;
                 finishedReady = false;
+                requestVersion++;
             }
         }
 
@@ -248,7 +260,11 @@ namespace ConwayGameOfLife
                 current.WarpStrength, current.ClusterStrength));
         }
 
-        /// <summary>Asks for a candidate built from the current parameters.</summary>
+        /// <summary>
+        /// Asks for a candidate built from the current parameters. Every request gets its own
+        /// identity: a task that belongs to an earlier one may finish or fail, and either way
+        /// it has no say in the state of this one.
+        /// </summary>
         public void RequestCandidate()
         {
             lock (gate)
@@ -256,6 +272,7 @@ namespace ConwayGameOfLife
                 if (disposed)
                     return;
 
+                requestVersion++;
                 wantCandidate = true;
                 requestPending = true;
                 failure = null;
@@ -278,10 +295,14 @@ namespace ConwayGameOfLife
             {
                 if (finishedReady)
                 {
-                    // The comparison is against the live parameters, not against which
-                    // task finished last: "only the newest parameters win" has to hold
-                    // when a slow old task overtakes a fast new one.
-                    if (wantCandidate && finishedParameters.Equals(parameters))
+                    // Both checks, deliberately. Identity says the task still belongs to the
+                    // request that matters; the snapshot says the board it produced still
+                    // describes the controls. Neither alone is enough: a result can outlive
+                    // its request without the parameters changing (cancel, dispose,
+                    // supersession), and parameters can move on with a request still valid.
+                    if (wantCandidate &&
+                        finishedVersion == requestVersion &&
+                        finishedParameters.Equals(parameters))
                     {
                         // Swap rather than copy. The buffer the main thread was reading
                         // becomes the worker's next target, so a steady stream of
@@ -311,6 +332,7 @@ namespace ConwayGameOfLife
         /// <summary>Caller must hold <see cref="gate"/>.</summary>
         private void StartNextIfIdle()
         {
+            int version;
             LifeNoiseParameters snapshot;
             byte[] buffer;
 
@@ -325,6 +347,7 @@ namespace ConwayGameOfLife
                     return;
 
                 working = true;
+                version = requestVersion;
                 snapshot = parameters;
                 buffer = worker;
             }
@@ -347,11 +370,14 @@ namespace ConwayGameOfLife
                     {
                         working = false;
 
-                        if (disposed)
-                        {
-                            // The session is gone; there is nobody left to report to.
-                        }
-                        else if (parameters.Equals(snapshot))
+                        // Identity first, exactly as for a successful result: a task that
+                        // belongs to a request which was cancelled, disposed or replaced
+                        // has no say in the current state. Clearing the request here was
+                        // the defect -- the replacement the user asked for was silently
+                        // cancelled by the death of something already superseded, and a
+                        // cancel followed by an identical request was cancelled by the
+                        // abandoned task it had just replaced.
+                        if (!disposed && version == requestVersion)
                         {
                             // The failed task WAS the current request, so nothing is on
                             // the way. Stop waiting -- leaving wantCandidate set would
@@ -360,12 +386,6 @@ namespace ConwayGameOfLife
                             wantCandidate = false;
                             failure = exception.Message;
                         }
-
-                        // A failure from a task whose parameters have already been
-                        // replaced is dropped exactly like its result would have been.
-                        // Clearing the request here was a real defect: the replacement
-                        // the user asked for was silently cancelled by the death of the
-                        // thing that had already been superseded.
                     }
 
                     // The worker is free again, so a request that arrived while it was
@@ -384,6 +404,7 @@ namespace ConwayGameOfLife
                         return;
 
                     finishedReady = true;
+                    finishedVersion = version;
                     finishedAlive = alive;
                     finishedMilliseconds = watch.Elapsed.TotalMilliseconds;
                     finishedParameters = snapshot;
@@ -393,9 +414,13 @@ namespace ConwayGameOfLife
 
         /// <summary>
         /// Drops the candidate and stops the pipeline. Anything already in flight is
-        /// abandoned -- it may run to completion, but nothing it produces is wanted -- and
-        /// no replacement is started. The interface is released in the same call: the
-        /// task winding down behind the scenes must not keep the clock disabled.
+        /// abandoned -- it may run to completion or throw, but nothing it produces is
+        /// wanted -- and no replacement is started. The interface is released in the same
+        /// call: the task winding down behind the scenes must not keep the clock disabled.
+        ///
+        /// <para>The request identity is retired here as well. Cancelling does not change
+        /// the parameters, so a task abandoned by this call would still pass a content
+        /// check; only the identity can tell it that its request is over.</para>
         /// </summary>
         public void Cancel()
         {
@@ -406,6 +431,7 @@ namespace ConwayGameOfLife
                 requestPending = false;
                 finishedReady = false;
                 failure = null;
+                requestVersion++;
             }
         }
 
@@ -429,9 +455,11 @@ namespace ConwayGameOfLife
                 hasCandidate = false;
 
                 // The candidate has been consumed; do not build another one behind
-                // the user's back.
+                // the user's back. The request that produced it is over, so its identity
+                // is retired as well.
                 wantCandidate = false;
                 requestPending = false;
+                requestVersion++;
 
                 return confirmed;
             }
@@ -450,7 +478,8 @@ namespace ConwayGameOfLife
         /// Refuses everything from here on. Deliberately does NOT wait for a running task:
         /// this is called from the destroy path on the main thread, and blocking there to
         /// collect a result nobody will use would turn a clean exit into a stall. The task
-        /// finishes on its own and its result is dropped by the <see cref="disposed"/> check.
+        /// finishes on its own and is refused by the identity and <see cref="disposed"/>
+        /// checks -- a late failure cannot report anything either.
         /// </summary>
         public void Dispose()
         {
@@ -462,6 +491,7 @@ namespace ConwayGameOfLife
                 finishedReady = false;
                 hasCandidate = false;
                 failure = null;
+                requestVersion++;
             }
         }
     }
