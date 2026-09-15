@@ -6,20 +6,30 @@
 
 ## 1. 模块划分
 
-```
-ConwayGameOfLife.Runtime (Assembly Definition, 允许引用 UnityEngine)
-├── LifeSimulation.cs          规则引擎 — 纯 C#，零 UnityEngine 依赖
-├── LifePatterns.cs            样本数据与分类 — 同样零 UnityEngine 依赖
-├── LifeGridElement.cs         网格渲染与鼠标编辑 (VisualElement)
-└── LifeTerminalController.cs  界面装配、演化驱动、状态同步
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
+flowchart TB
+    subgraph RT["ConwayGameOfLife.Runtime"]
+        LS["LifeSimulation.cs<br/>规则引擎 — 纯 C#，零 UnityEngine 依赖"]
+        LP["LifePatterns.cs<br/>样本数据与分类 — 同样零 UnityEngine 依赖"]
+        GE["LifeGridElement.cs<br/>网格渲染与鼠标编辑（VisualElement）"]
+        TC["LifeTerminalController.cs<br/>界面装配、演化驱动、状态同步"]
+    end
 
-ConwayGameOfLife.Tests.EditMode (Assembly Definition, 仅编辑器)
-├── LifeSimulationTests.cs     规则、边界、簿记
-└── LifePatternTests.cs        每个样本的行为断言
+    subgraph EM["ConwayGameOfLife.Tests.EditMode"]
+        ST["LifeSimulationTests.cs<br/>规则、边界、簿记"]
+        PT["LifePatternTests.cs<br/>每个样本的行为断言"]
+    end
 
-ConwayGameOfLife.Tests.PlayMode (Assembly Definition)
-└── LifeTerminalBootstrapTests.cs  界面自举、交互、布局适配、运行时性能采样
+    subgraph PM["ConwayGameOfLife.Tests.PlayMode"]
+        BT["LifeTerminalBootstrapTests.cs<br/>界面自举、交互、布局适配、运行时性能采样"]
+    end
+
+    EM -->|引用| RT
+    PM -->|引用| RT
 ```
+
+三个 subgraph 各对应一个 Assembly Definition 文件：`Runtime` 允许引用 `UnityEngine`，`Tests.EditMode` 仅在编辑器下编译，`Tests.PlayMode` 覆盖运行时行为。
 
 **关于"纯 C#"这条边界，需要准确地说明它由什么保证：**
 
@@ -33,30 +43,40 @@ ConwayGameOfLife.Tests.PlayMode (Assembly Definition)
 
 ## 2. 数据流
 
-```
-                  ┌─────────────────────────────────────────┐
-   玩家点击样本 ──▶ │ LifeTerminalController.LoadPattern()    │
-                  │   → simulation.LoadCentered(cells)      │
-                  └────────────────┬────────────────────────┘
-                                   │ 写入 current 缓冲
-                                   ▼
-   ┌───────────────────────────────────────────────────────────┐
-   │ LifeSimulation                                            │
-   │   current[] ──Step()──▶ next[] ──交换引用──▶ current[]     │
-   │   Generation++  Population 重算                            │
-   └───────────────────────────────┬───────────────────────────┘
-                                   │ 状态查询
-                                   ▼
-   ┌───────────────────────────────────────────────────────────┐
-   │ LifeGridElement.DrawGrid(MeshGenerationContext)           │
-   │   generateVisualContent 回调 → Painter2D 绘制              │
-   └───────────────────────────────┬───────────────────────────┘
-                                   │
-                                   ▼
-                           Unity Game View
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
+flowchart TB
+    Click(["玩家点击样本"])
+    Drag(["玩家拖拽"])
 
-   玩家拖拽 ──▶ LifeGridElement.Paint() ──▶ simulation.SetCell()
-                                          └─▶ Edited 回调 ──▶ 控制器暂停演化
+    subgraph CTRL["LifeTerminalController"]
+        Load["LoadPattern()"]
+        Stop["Stop()<br/>暂停 + 清空累加器 + 刷新 UI"]
+    end
+
+    subgraph SIM["LifeSimulation"]
+        Cur["current[]"]
+        Next["next[]"]
+        Book["Generation++ · Population 重算"]
+        Cur -->|"Step()"| Next
+        Next -->|"交换引用"| Cur
+        Next -.-> Book
+    end
+
+    subgraph VIEW["LifeGridElement"]
+        Paint["Paint()"]
+        Draw["DrawGrid(MeshGenerationContext)<br/>generateVisualContent 回调 → Painter2D 绘制"]
+    end
+
+    GameView(["Unity Game View"])
+
+    Click --> Load
+    Load -->|"LoadCentered(cells)<br/>写入 current 缓冲"| Cur
+    Cur -->|"状态查询"| Draw
+    Draw --> GameView
+    Drag --> Paint
+    Paint -->|"SetCell()"| Cur
+    Paint -->|"Edited 回调<br/>控制器暂停演化"| Stop
 ```
 
 关键点：**数据是单向流动的**。`LifeGridElement` 只读取 `LifeSimulation`，唯一的写入路径是 `Paint()`（用户编辑），并通过 `Edited` 回调通知控制器。视图层不持有任何演化状态。
@@ -158,7 +178,7 @@ private static void Bootstrap()
 
 场景中无需预先摆放任何物体，任意场景按 Play 都能启动。`FindAnyObjectByType` 检查避免重复创建。
 
-**界面构建**：全部在 `Awake()` 中用 C# 代码构建，不依赖 UXML 资产。`PanelSettings` 也在运行时 `CreateInstance`，缩放模式为 `ScaleWithScreenSize`，参考分辨率 1440×900。这样做的好处是项目里没有需要维护的 UI 资产文件，界面即代码。
+**界面构建**：全部在 `Awake()` 中用 C# 代码构建，不依赖 UXML 资产。`PanelSettings` 也在运行时 `CreateInstance`，缩放模式为 `ScaleWithScreenSize`，`screenMatchMode` 为 `MatchWidthOrHeight`（`match = 0.5`），参考分辨率 **1600×900（16:9）**。这样做的好处是项目里没有需要维护的 UI 资产文件，界面即代码。
 
 **演化驱动**：
 
@@ -181,28 +201,32 @@ while (accumulator >= interval)
 
 ## 4. 界面布局
 
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 320}}}%%
+flowchart TB
+    subgraph HEADER["header"]
+        H1["生命演算所 · ● 演算进行中<br/>CONWAY'S GAME OF LIFE / FIELD STATION 04"]
+    end
+
+    subgraph MACHINE["machine — 仪器外壳"]
+        SB["top-line：LIFE TERMINAL · MODEL 1970 ｜ CELLULAR AUTOMATA / B3 · S23"]
+        subgraph WORKSPACE["workspace — 横向两栏"]
+            DISP["display<br/>screen-bar：样本 05 / 脉冲星 · PULSAR ｜ 96 × 64 / LIVE FIELD<br/><br/>life-grid（Painter2D 自绘网格）<br/><br/>readouts：GENERATION / 世代 ｜ POPULATION / 存活 ｜ STATE / 状态"]
+            LIB["library（固定 236px）<br/>样本档案<br/>SPECIMEN ARCHIVE / 08 ENTRIES<br/><br/>preset-scroll：8 个样本按钮<br/><br/>dropdown：边界条件"]
+        end
+        CTL["controls：［▶ 运行］［▸ 单步］［↺ 重置］ ｜ 速率 ──●── ｜ ［随机播种］［清空］"]
+    end
+
+    subgraph FOOTER["footer"]
+        F1["实验记录 / LIFE–001 ｜ 生命，始于简单的规则。"]
+    end
+
+    HEADER ~~~ MACHINE ~~~ FOOTER
+    SB ~~~ WORKSPACE ~~~ CTL
 ```
-┌─ header ────────────────────────────────────────────┐
-│ 生命演算所                              ●  演算进行中 │
-│ CONWAY'S GAME OF LIFE / FIELD STATION 04             │
-├─ machine ───────────────────────────────────────────┤
-│ LIFE TERMINAL · MODEL 1970      CELLULAR AUTOMATA…  │
-│ ┌─ display ─────────────────────┐ ┌─ library ─────┐ │
-│ │ 样本 05 / 脉冲星 · PULSAR      │ │ 样本档案       │ │
-│ │                    96 × 64 …   │ │ ┌───────────┐ │ │
-│ ├────────────────────────────────┤ │ │  方块      │ │ │
-│ │                                │ │ ├───────────┤ │ │
-│ │        网格（Painter2D）        │ │ │  蜂巢      │ │ │
-│ │                                │ │ ├───────────┤ │ │
-│ │                                │ │ │  … 共 8 项 │ │ │
-│ ├────────────────────────────────┤ │ └───────────┘ │ │
-│ │ GENERATION │ POPULATION │ STATE│ │ 边界条件 [▼]  │ │
-│ └────────────────────────────────┘ └───────────────┘ │
-│ [▶ 运行][▸ 单步][↺ 重置] 速率 ──●── [随机播种][清空] │
-├─ footer ────────────────────────────────────────────┤
-│ 实验记录 / LIFE–001              生命，始于简单的规则。│
-└─────────────────────────────────────────────────────┘
-```
+
+> 上图表达**从属关系与排列顺序**：根元素 `.app` 下依次是 `header` / `machine` / `footer`；`machine` 内为 `top-line` → `workspace` → `controls`；`workspace` 是 `display` 与 `library` 两栏并排。
+> **像素比例无法用 Mermaid 表达**——`library` 固定 236px，其余宽度全部归 `display`。真实观感见 `Screenshots/` 下的实机截图。
 
 样式在 `Assets/Resources/LifeTerminal.uss`，采用终端机/仪器面板的视觉隐喻（金属外壳、暗色屏幕、琥珀色读数）。使用 USS 变量集中定义调色板：
 
