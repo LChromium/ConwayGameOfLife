@@ -90,7 +90,8 @@ Direct3D12，StandaloneWindows64 发布构建（`isDevelopmentBuild=false`），
 | 256x256 | 65 536 | **2.457 ms/代** | 0.0016 ms/代 | 0.026 ms/代 | 0.0034 ms/次 |
 | 1024x1024 | 1 048 576 | **38.66 ms/代** | 0.0005 ms/代 | 0.415 ms/代 | 0.0024 ms/次 |
 
-中位数；CPU 一列为 7 次重复 × 20 步，范围 1.60–1.05 倍中位数。
+中位数；CPU 一列为 7 次重复 × 20 步，各档最小值落在中位数的 0.87–0.95 倍、
+最大值落在 1.04–1.52 倍。
 
 **每个数字该怎么读：**
 
@@ -104,6 +105,21 @@ Direct3D12，StandaloneWindows64 发布构建（`isDevelopmentBuild=false`），
 
 **未测**：GPU 执行时间。枚举 profiler 标记需要 `Unity.Profiling.LowLevel.Unsafe`，
 且发布版 Player 中不保证存在 GPU 计时标记。按规格要求，此处**保留未测，不用估算补齐**。
+
+### 5.1 本阶段不作性能归因
+
+**不得从本节的数字推导 GPU 相对 CPU 的加速比。** 理由：
+
+- GPU 执行时间未测。表里的两个 GPU 列，一个只有提交开销，另一个是含同步与整盘回读的上界，
+  两者都不是可以拿去和 CPU 列相除的量。
+- 因此本阶段只能说：**GPU 后端在大棋盘上具备可运行性**（1024² 已跑通并有画面证据）。
+  不宣称"快多少"。
+
+**结论的适用范围**：以上全部数字来自 NVIDIA GeForce RTX 4070 Ti、Direct3D12、
+Windows StandaloneWindows64 发布构建、vsync 开启、`targetFrameRate=120` 这一台机器与这一套配置。
+**不可泛化到其他硬件或图形 API**；换环境必须重测。
+
+CPU 参考后端继续保留：它既是正确性基线，也是低规模下的回退路径。
 
 ### 帧间隔
 
@@ -151,3 +167,13 @@ Builds\LifeTerminal.exe -screen-width 1600 -screen-height 900 -screen-fullscreen
 
 启动参数：`-lifeBoard WxH`、`-lifePattern <EnglishName>`（精确匹配，未知名称会告警并列出可用名）、
 `-lifeZoom <像素/格>`（0 = 能装下就装下）、`-lifeRun`（启动即运行）、`-lifePerf`（测量后退出）。
+
+---
+
+## 8. 阶段结论
+
+> GPU 演化与显示已经完成正确性闭环，1024² 已有真实运行证据；GPU 纯执行时间暂未测量，
+> 因此不作绝对性能归因。CPU 参考后端继续保留，作为正确性基线和低规模回退。
+> 阶段 B 可以开始，范围限定为 fBM＋域扭曲概率播种，不改规则内核，不同时引入更多 GPU 优化。
+
+后续阶段（2048² / 4096²）属于压力测试，届时再实测；本阶段不预先承诺帧率，也不承诺 8192²。
