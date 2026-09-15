@@ -5,6 +5,13 @@ using System.Threading.Tasks;
 namespace ConwayGameOfLife
 {
     /// <summary>
+    /// Fills a board from a parameter set. Injected so tests can decide exactly when a
+    /// generation finishes; production uses <see cref="LifeNoiseSeeding.Generate"/>.
+    /// </summary>
+    public delegate void LifeBoardGenerator(
+        LifeNoiseParameters parameters, int width, int height, byte[] destination);
+
+    /// <summary>
     /// Stage-B seeding state: the parameters being edited, the candidate board, and
     /// the parameters that were last confirmed.
     ///
@@ -21,16 +28,24 @@ namespace ConwayGameOfLife
     /// roughly half a second; doing that inside a slider callback blocks the frame.
     /// <see cref="RequestCandidate"/> hands an immutable parameter snapshot to a
     /// background task and the main thread collects the result in
-    /// <see cref="PumpGeneration"/>. Debouncing reduces how often that happens; it
-    /// does not make the work cheaper, which is why the work moved off the main
-    /// thread rather than merely being slowed down.</para>
+    /// <see cref="PumpGeneration"/>.</para>
     ///
-    /// <para><b>Only the newest request is ever adopted.</b> Requests are numbered.
-    /// A result whose number is no longer current is dropped -- whether the user
-    /// changed a parameter again, cancelled, or moved to another specimen. At most
-    /// one task runs at a time; if the parameters moved on while it ran, the next
-    /// one starts as soon as it finishes, so a long drag coalesces instead of
-    /// queueing one generation per event.</para>
+    /// <para><b>Parameters decide what may be adopted, not arrival order.</b> A result is
+    /// taken only when the parameters it was built from still equal the parameters being
+    /// edited. <see cref="SetParameters"/> therefore invalidates an outstanding request
+    /// <i>immediately</i>: a task that was already running when a slider moved can finish,
+    /// but what it produces is dropped instead of being uploaded a moment later. Debouncing
+    /// only decides when the replacement computation is asked for; it does not decide
+    /// whether the old one still counts.</para>
+    ///
+    /// <para><b>Two different questions, two different answers.</b>
+    /// <see cref="IsGenerating"/> means "the panel is waiting for a candidate that matches
+    /// the controls", and it is what the interface may use to lock the clock.
+    /// <see cref="IsWorking"/> means "a background task is still running", which is true
+    /// for a while after a cancel as well -- and must never lock anything.
+    /// <see cref="HasPendingRequest"/> means "a request has been issued whose result has not
+    /// been adopted". Keeping them apart is what stops a cancelled generation from
+    /// re-disabling the controls on the next pump.</para>
     ///
     /// <para><b>Two buffers, swapped.</b> The worker writes into one while the main
     /// thread reads the other, and adoption swaps them. Nothing allocates a board
@@ -39,82 +54,197 @@ namespace ConwayGameOfLife
     public sealed class LifeSeedingSession : IDisposable
     {
         private readonly object gate = new();
+        private readonly LifeBoardGenerator generator;
 
         private byte[] candidate;
         private byte[] worker;
 
-        private int requestId;       // the newest request anybody still wants
-        private int inFlightId = -1;
-        private int finishedId = -1;
-        private int satisfiedId = -1;  // the request whose result is currently on screen
+        // The pipeline. "wantCandidate" is the user's intent, "requestPending" is an
+        // issued-and-unanswered request, "working" is a task actually running.
         private bool wantCandidate;
+        private bool requestPending;
+        private bool working;
         private bool finishedReady;
         private int finishedAlive;
         private double finishedMilliseconds;
         private LifeNoiseParameters finishedParameters;
+
+        // The candidate on screen.
+        private bool hasCandidate;
+        private LifeNoiseParameters candidateParameters;
+        private float candidateDensity;
+        private int candidateAliveCount;
+        private double lastGenerationMilliseconds;
+
+        private bool hasAppliedParameters;
+        private LifeNoiseParameters appliedParameters;
+        private string failure;
         private bool disposed;
 
-        public LifeSeedingSession(int width, int height)
+        public LifeSeedingSession(int width, int height, LifeBoardGenerator generator = null)
         {
             if (width <= 0 || height <= 0)
                 throw new ArgumentOutOfRangeException(nameof(width), "Board dimensions must be positive.");
 
             Width = width;
             Height = height;
+            this.generator = generator ?? DefaultGenerator;
             candidate = new byte[width * height];
             worker = new byte[width * height];
-            Parameters = new LifeNoiseParameters(LifeSeedingMode.Fbm, 1, 0.32f, 48f, 6f, 0.6f);
-            CandidateParameters = Parameters;
+            parameters = new LifeNoiseParameters(LifeSeedingMode.Fbm, 1, 0.32f, 48f, 6f, 0.6f);
+            candidateParameters = parameters;
         }
+
+        private static void DefaultGenerator(
+            LifeNoiseParameters parameters, int width, int height, byte[] destination) =>
+            LifeNoiseSeeding.Generate(parameters, width, height, destination);
 
         public int Width { get; }
         public int Height { get; }
 
-        /// <summary>The parameters currently being edited.</summary>
-        public LifeNoiseParameters Parameters { get; private set; }
+        private LifeNoiseParameters parameters;
 
-        public bool HasAppliedParameters { get; private set; }
+        /// <summary>The parameters currently being edited.</summary>
+        public LifeNoiseParameters Parameters
+        {
+            get { lock (gate) { return parameters; } }
+        }
+
+        public bool HasAppliedParameters
+        {
+            get { lock (gate) { return hasAppliedParameters; } }
+        }
 
         /// <summary>The parameters behind the board that is actually loaded.</summary>
-        public LifeNoiseParameters AppliedParameters { get; private set; }
+        public LifeNoiseParameters AppliedParameters
+        {
+            get { lock (gate) { return appliedParameters; } }
+        }
 
-        public bool HasCandidate { get; private set; }
+        public bool HasCandidate
+        {
+            get { lock (gate) { return hasCandidate; } }
+        }
 
         /// <summary>The parameters the candidate on screen was generated from.</summary>
-        public LifeNoiseParameters CandidateParameters { get; private set; }
+        public LifeNoiseParameters CandidateParameters
+        {
+            get { lock (gate) { return candidateParameters; } }
+        }
 
         /// <summary>
         /// True while the candidate on screen came from parameters that have since
         /// changed. The UI says "pending" rather than pretending the picture matches
         /// the controls.
         /// </summary>
-        public bool CandidateIsStale => HasCandidate && !CandidateParameters.Equals(Parameters);
+        public bool CandidateIsStale
+        {
+            get { lock (gate) { return IsStaleLocked; } }
+        }
 
         /// <summary>The candidate cells, row-major, values 0/1. Only valid while <see cref="HasCandidate"/>.</summary>
-        public ReadOnlySpan<byte> Candidate => candidate;
+        public ReadOnlySpan<byte> Candidate
+        {
+            get { lock (gate) { return candidate; } }
+        }
 
         /// <summary>Density actually realised by the candidate. The base density is not a population promise.</summary>
-        public float CandidateDensity { get; private set; }
+        public float CandidateDensity
+        {
+            get { lock (gate) { return candidateDensity; } }
+        }
 
-        public int CandidateAliveCount { get; private set; }
+        public int CandidateAliveCount
+        {
+            get { lock (gate) { return candidateAliveCount; } }
+        }
 
         /// <summary>Cost of the last adopted generation. Half a second is not free, so it is reported.</summary>
-        public double LastGenerationMilliseconds { get; private set; }
-
-        /// <summary>True while a result for the current parameters is still outstanding.</summary>
-        public bool IsGenerating { get; private set; }
+        public double LastGenerationMilliseconds
+        {
+            get { lock (gate) { return lastGenerationMilliseconds; } }
+        }
 
         /// <summary>
-        /// Replaces the parameters. Generation is NOT started here: the caller debounces
-        /// and then calls <see cref="RequestCandidate"/>, so a slider drag does not
-        /// queue one generation per event.
+        /// The panel is waiting for a candidate that describes the current parameters.
+        /// This is the only state that may disable the clock, single-step and painting.
         /// </summary>
-        public void SetParameters(in LifeNoiseParameters parameters) => Parameters = parameters;
+        public bool IsGenerating
+        {
+            get { lock (gate) { return IsGeneratingLocked; } }
+        }
+
+        /// <summary>
+        /// A background task is running. True for a while after a cancel too -- an
+        /// abandoned task still has to finish -- so it must never lock the interface.
+        /// It exists so "the old task is winding down" and "the user is still waiting"
+        /// can be told apart.
+        /// </summary>
+        public bool IsWorking
+        {
+            get { lock (gate) { return working; } }
+        }
+
+        /// <summary>True from <see cref="RequestCandidate"/> until its result has been adopted.</summary>
+        public bool HasPendingRequest
+        {
+            get { lock (gate) { return requestPending; } }
+        }
+
+        /// <summary>
+        /// Why the last generation failed, or null. A generator that throws must not leave
+        /// the panel promising a candidate that will never arrive.
+        /// </summary>
+        public string FailureMessage
+        {
+            get { lock (gate) { return failure; } }
+        }
+
+        public bool IsDisposed
+        {
+            get { lock (gate) { return disposed; } }
+        }
+
+        private bool IsStaleLocked => hasCandidate && !candidateParameters.Equals(parameters);
+
+        private bool IsGeneratingLocked => wantCandidate && !(hasCandidate && !IsStaleLocked);
+
+        /// <summary>
+        /// Replaces the parameters and invalidates anything already computed or in flight
+        /// for the old ones. Generation is NOT started here: the caller debounces and then
+        /// calls <see cref="RequestCandidate"/>, so a slider drag does not queue one
+        /// generation per event.
+        /// </summary>
+        public void SetParameters(in LifeNoiseParameters parameters)
+        {
+            lock (gate)
+            {
+                if (this.parameters.Equals(parameters))
+                    return;
+
+                this.parameters = parameters;
+
+                // Immediate invalidation. The task may still be running; whatever it
+                // produces describes parameters the controls have already left behind,
+                // so it is refused on arrival rather than uploaded a frame later.
+                requestPending = false;
+                finishedReady = false;
+            }
+        }
 
         /// <summary>Moves to a different seed. Kept separate because changing the seed is a deliberate act.</summary>
-        public void Reseed(int seed) => SetParameters(new LifeNoiseParameters(
-            Parameters.Mode, seed, Parameters.Density, Parameters.Scale,
-            Parameters.WarpStrength, Parameters.ClusterStrength));
+        public void Reseed(int seed)
+        {
+            LifeNoiseParameters current;
+            lock (gate)
+            {
+                current = parameters;
+            }
+
+            SetParameters(new LifeNoiseParameters(
+                current.Mode, seed, current.Density, current.Scale,
+                current.WarpStrength, current.ClusterStrength));
+        }
 
         /// <summary>Asks for a candidate built from the current parameters.</summary>
         public void RequestCandidate()
@@ -124,17 +254,19 @@ namespace ConwayGameOfLife
                 if (disposed)
                     return;
 
-                requestId++;
                 wantCandidate = true;
+                requestPending = true;
+                failure = null;
             }
 
             StartNextIfIdle();
         }
 
         /// <summary>
-        /// Main-thread pump. Adopts a finished candidate when it is still the newest
-        /// request, drops it when it is not, and starts the next one if the parameters
-        /// moved on. Returns true when a new candidate was adopted.
+        /// Main-thread pump. Adopts a finished candidate when it still describes the
+        /// parameters being edited, drops it when it does not, and starts a pending
+        /// request as soon as the worker is free. Returns true when a new candidate
+        /// was adopted.
         /// </summary>
         public bool PumpGeneration()
         {
@@ -144,27 +276,30 @@ namespace ConwayGameOfLife
             {
                 if (finishedReady)
                 {
-                    if (finishedId == requestId && wantCandidate)
+                    // The comparison is against the live parameters, not against which
+                    // task finished last: "only the newest parameters win" has to hold
+                    // when a slow old task overtakes a fast new one.
+                    if (wantCandidate && finishedParameters.Equals(parameters))
                     {
                         // Swap rather than copy. The buffer the main thread was reading
                         // becomes the worker's next target, so a steady stream of
                         // previews allocates nothing.
                         (candidate, worker) = (worker, candidate);
-                        CandidateAliveCount = finishedAlive;
-                        CandidateDensity = (float)finishedAlive / candidate.Length;
-                        LastGenerationMilliseconds = finishedMilliseconds;
-                        CandidateParameters = finishedParameters;
-                        HasCandidate = true;
-                        satisfiedId = finishedId;
+                        candidateAliveCount = finishedAlive;
+                        candidateDensity = candidate.Length > 0
+                            ? (float)finishedAlive / candidate.Length
+                            : 0f;
+                        lastGenerationMilliseconds = finishedMilliseconds;
+                        candidateParameters = finishedParameters;
+                        hasCandidate = true;
+                        requestPending = false;
                         adopted = true;
                     }
 
-                    // Either way it is consumed: a stale result must not be adopted
-                    // later just because the request numbers happen to line up again.
+                    // Either way it is consumed: a result that was refused must not be
+                    // adopted later just because it happens to fit again.
                     finishedReady = false;
                 }
-
-                IsGenerating = inFlightId >= 0 || (wantCandidate && satisfiedId != requestId);
             }
 
             StartNextIfIdle();
@@ -172,77 +307,86 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>Caller must hold <see cref="gate"/>.</summary>
-        private bool HasCurrentResult() => finishedReady && finishedId == requestId && wantCandidate;
-
         private void StartNextIfIdle()
         {
-            int id;
             LifeNoiseParameters snapshot;
             byte[] buffer;
 
             lock (gate)
             {
-                // "wantCandidate" is what stops the pipeline: without it, cancelling
-                // would immediately start a fresh generation for the same parameters
-                // and the candidate the user just dismissed would reappear.
-                if (disposed || !wantCandidate || inFlightId >= 0 || satisfiedId == requestId)
+                // Three separate reasons to hold off, and they are not interchangeable:
+                // nothing is wanted (the user cancelled), nothing was asked for (the
+                // debounce has not elapsed), or the worker is busy. A pending request
+                // survives a busy worker, so a long drag coalesces into one extra
+                // generation instead of one per event or none at all.
+                if (disposed || !wantCandidate || !requestPending || working || finishedReady)
                     return;
 
-                inFlightId = requestId;
-                id = inFlightId;
-                snapshot = Parameters;
+                working = true;
+                snapshot = parameters;
                 buffer = worker;
-                IsGenerating = true;
             }
 
             Task.Run(() =>
             {
                 var watch = Stopwatch.StartNew();
-                LifeNoiseSeeding.Generate(snapshot, Width, Height, buffer);
-                int alive = LifeNoiseSeeding.CountAlive(buffer);
+                int alive;
+
+                try
+                {
+                    generator(snapshot, Width, Height, buffer);
+                    alive = LifeNoiseSeeding.CountAlive(buffer);
+                }
+                catch (Exception exception)
+                {
+                    watch.Stop();
+
+                    lock (gate)
+                    {
+                        working = false;
+                        requestPending = false;
+
+                        // Stop waiting for something that will never arrive: leaving
+                        // wantCandidate set would keep the clock disabled for good.
+                        wantCandidate = false;
+                        failure = exception.Message;
+                    }
+
+                    return;
+                }
+
                 watch.Stop();
 
                 lock (gate)
                 {
+                    working = false;
+
                     if (disposed)
                         return;
 
-                    // The buffer may already have been superseded; the id decides,
-                    // not the order in which tasks happen to finish.
-                    if (id >= finishedId || !finishedReady)
-                    {
-                        finishedId = id;
-                        finishedAlive = alive;
-                        finishedMilliseconds = watch.Elapsed.TotalMilliseconds;
-                        finishedParameters = snapshot;
-                        finishedReady = true;
-                    }
-
-                    inFlightId = -1;
+                    finishedReady = true;
+                    finishedAlive = alive;
+                    finishedMilliseconds = watch.Elapsed.TotalMilliseconds;
+                    finishedParameters = snapshot;
                 }
             });
         }
 
         /// <summary>
         /// Drops the candidate and stops the pipeline. Anything already in flight is
-        /// invalidated, and no replacement is started -- otherwise the candidate the
-        /// user just dismissed would be regenerated from the same parameters and
-        /// reappear a moment later.
+        /// abandoned -- it may run to completion, but nothing it produces is wanted -- and
+        /// no replacement is started. The interface is released in the same call: the
+        /// task winding down behind the scenes must not keep the clock disabled.
         /// </summary>
         public void Cancel()
         {
             lock (gate)
             {
-                HasCandidate = false;
+                hasCandidate = false;
                 wantCandidate = false;
-                requestId++;
-                satisfiedId = requestId;   // the current request is settled by not generating
+                requestPending = false;
                 finishedReady = false;
-                finishedId = -1;
-
-                // A task may still be running, but nothing it produces is wanted, so
-                // the UI must not keep saying "generating".
-                IsGenerating = false;
+                failure = null;
             }
         }
 
@@ -256,20 +400,19 @@ namespace ConwayGameOfLife
         {
             lock (gate)
             {
-                if (!HasCandidate || CandidateIsStale)
+                if (!hasCandidate || IsStaleLocked)
                     return null;
 
                 var confirmed = (byte[])candidate.Clone();
 
-                AppliedParameters = CandidateParameters;
-                HasAppliedParameters = true;
-                HasCandidate = false;
+                appliedParameters = candidateParameters;
+                hasAppliedParameters = true;
+                hasCandidate = false;
 
                 // The candidate has been consumed; do not build another one behind
                 // the user's back.
                 wantCandidate = false;
-                satisfiedId = requestId;
-                IsGenerating = false;
+                requestPending = false;
 
                 return confirmed;
             }
@@ -279,19 +422,27 @@ namespace ConwayGameOfLife
         /// The confirmed board came from somewhere else (a specimen, or a manual
         /// clear), so the seeding parameters no longer describe what is loaded.
         /// </summary>
-        public void ForgetApplied() => HasAppliedParameters = false;
+        public void ForgetApplied()
+        {
+            lock (gate) { hasAppliedParameters = false; }
+        }
 
+        /// <summary>
+        /// Refuses everything from here on. Deliberately does NOT wait for a running task:
+        /// this is called from the destroy path on the main thread, and blocking there to
+        /// collect a result nobody will use would turn a clean exit into a stall. The task
+        /// finishes on its own and its result is dropped by the <see cref="disposed"/> check.
+        /// </summary>
         public void Dispose()
         {
             lock (gate)
             {
                 disposed = true;
                 wantCandidate = false;
-                requestId++;
-                satisfiedId = requestId;
+                requestPending = false;
                 finishedReady = false;
-                HasCandidate = false;
-                IsGenerating = false;
+                hasCandidate = false;
+                failure = null;
             }
         }
     }

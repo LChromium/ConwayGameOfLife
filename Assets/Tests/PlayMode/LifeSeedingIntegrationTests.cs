@@ -596,6 +596,155 @@ namespace ConwayGameOfLife.Tests
                 "an empty board must stay empty: evolution cannot be reading the noise field");
         }
 
+        [UnityTest]
+        public IEnumerator EditingSeedParameters_WithoutPreview_DoesNotGenerateOrLockTheBoard()
+        {
+            // The failure this test exists for: with no preview open, dragging a slider used
+            // to request a candidate anyway. Nothing displayed it, but it still counted as
+            // "a candidate exists", which disabled 运行, 单步 and painting -- and left the
+            // clock running underneath a board the interface claimed was busy.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            LifeTerminalController controller = Controller();
+            LifeGridElement grid = Grid(root);
+
+            Press(root.Q<Button>("tool-tab-seeding"));
+            yield return null;
+
+            yield return RunTheClock(root);
+            ILifeBackend backend = ReadBackend(controller);
+            int generationBefore = backend.Generation;
+
+            // Drive the real slider, the way a user would.
+            Slider density = root.Q<Slider>("seed-density");
+            density.value = 0.47f;
+            yield return null;
+
+            // Well past the debounce window: anything the edit was going to trigger has
+            // already been triggered.
+            yield return new WaitForSecondsRealtime(0.6f);
+            yield return null;
+
+            Assert.AreEqual(0.47f, controller.Seeding.Parameters.Density, 1e-4f,
+                "the edit must still reach the parameters");
+            Assert.IsFalse(controller.Seeding.HasCandidate,
+                "a candidate nothing is displaying must not exist");
+            Assert.IsFalse(controller.Seeding.IsGenerating, "no preview is open, so nothing is being generated");
+            Assert.IsFalse(controller.Seeding.IsWorking, "no background generation may have been started");
+
+            Assert.IsTrue(grid.EditingEnabled, "painting must stay available outside a preview");
+            Assert.Greater(backend.Generation, generationBefore,
+                "the board must keep evolving while its parameters are edited");
+
+            // Enabled is not the same as working: press the controls and check the effect.
+            yield return PauseTheClock(root);
+            int paused = backend.Generation;
+            PressButton(root, "▸ 单步");
+            yield return null;
+            Assert.AreEqual(paused + 1, backend.Generation,
+                "单步 must still work after editing parameters outside a preview");
+        }
+
+        [UnityTest]
+        public IEnumerator ApplyingAnOutOfDatePreview_AppliesTheNewestParameters()
+        {
+            // The command line asks for a preview AND an apply in one go. If the user edits a
+            // parameter while that first generation is still running, the superseded result
+            // must neither be displayed nor consume the apply intent: the board that ends up
+            // loaded has to be the one the controls describe.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            LifeTerminalController controller = Controller();
+            LifeGridElement grid = Grid(root);
+
+            SelectBackend(root, gpu: false);
+            yield return null;
+
+            FieldInfo intent = typeof(LifeTerminalController).GetField(
+                "seedingApplyWhenReady", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(intent, "the apply-when-ready intent field is missing");
+
+            Slider density = root.Q<Slider>("seed-density");
+            density.value = 0.30f;
+            yield return null;
+
+            // An earlier test may have applied a board already, so this waits for a NEW
+            // one rather than for "something has been applied".
+            LifeNoiseParameters appliedBefore = controller.Seeding.AppliedParameters;
+
+            // Same frame, deliberately: no pump can run in between, so the first result
+            // cannot be adopted before the parameters move on.
+            intent.SetValue(controller, true);
+            PressButton(root, "预览");
+            density.value = 0.47f;
+            yield return null;
+
+            float deadline = Time.realtimeSinceStartup + GenerationTimeoutSeconds;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                if (controller.Seeding.HasAppliedParameters &&
+                    !controller.Seeding.AppliedParameters.Equals(appliedBefore))
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(controller.Seeding.HasAppliedParameters &&
+                          !controller.Seeding.AppliedParameters.Equals(appliedBefore),
+                $"the apply intent was dropped: no new board was applied within {GenerationTimeoutSeconds}s");
+
+            Assert.AreEqual(0.47f, controller.Seeding.AppliedParameters.Density, 1e-4f,
+                "the applied board must come from the newest parameters, not the superseded ones");
+            Assert.AreEqual(density.value, controller.Seeding.AppliedParameters.Density, 1e-4f);
+            Assert.IsFalse(controller.Seeding.IsGenerating, "nothing may still be outstanding after applying");
+            Assert.IsFalse(grid.PreviewActive, "the preview colour must give way once applied");
+        }
+
+        [UnityTest]
+        public IEnumerator DestroyingTheController_DisposesTheSeedingSession()
+        {
+            // A second instance, so tearing it down cannot disturb the one every other
+            // test uses. The point is the real Unity destroy path: OnDestroy has to reach
+            // the session, or a background result is still adopted after teardown.
+            yield return Settle();
+
+            GameObject host = new("Life Terminal (destroy probe)");
+            LifeTerminalController probe = host.AddComponent<LifeTerminalController>();
+            yield return null;
+
+            LifeSeedingSession session = probe.Seeding;
+            Assert.IsNotNull(session, "the controller did not create a seeding session");
+            Assert.IsFalse(session.IsDisposed, "a live controller must not have a disposed session");
+
+            session.SetParameters(
+                new LifeNoiseParameters(LifeSeedingMode.Fbm, 2024, 0.32f, 24f, 5f, 0.7f));
+            session.RequestCandidate();
+            Assert.IsTrue(session.IsGenerating, "the probe should have a generation outstanding");
+
+            Object.Destroy(host);
+            yield return null;
+
+            Assert.IsTrue(session.IsDisposed,
+                "destroying the controller must dispose the seeding session");
+
+            float deadline = Time.realtimeSinceStartup + 5f;
+            while (session.IsWorking && Time.realtimeSinceStartup < deadline)
+                yield return null;
+
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.IsFalse(session.PumpGeneration(), "a disposed session must not adopt a late result");
+                yield return null;
+            }
+
+            Assert.IsFalse(session.HasCandidate,
+                "a generation that finishes after teardown must be refused");
+        }
+
         // -- helpers -------------------------------------------------------------
 
         [UnityTest]
@@ -660,6 +809,38 @@ namespace ConwayGameOfLife.Tests
             Assert.AreEqual(DisplayStyle.Flex,
                 root.Q<VisualElement>("tool-page-seeding").resolvedStyle.display,
                 "asking for a candidate should bring its panel forward");
+        }
+
+        /// <summary>The play/pause control, whichever label it currently carries.</summary>
+        private static Button PlayButton(VisualElement root)
+        {
+            Button play = FindButton(root, "▶ 运行") ?? FindButton(root, "Ⅱ 暂停");
+            Assert.IsNotNull(play, "missing the play/pause control");
+            return play;
+        }
+
+        /// <summary>Starts the clock from whichever state an earlier test left behind.</summary>
+        private static IEnumerator RunTheClock(VisualElement root)
+        {
+            Button play = PlayButton(root);
+            if (play.text == "Ⅱ 暂停")
+            {
+                Press(play);
+                yield return null;
+            }
+
+            Press(play);
+            yield return null;
+        }
+
+        private static IEnumerator PauseTheClock(VisualElement root)
+        {
+            Button play = PlayButton(root);
+            if (play.text == "▶ 运行")
+            {
+                Press(play);
+                yield return null;
+            }
         }
 
         private static string ReadCaption(VisualElement root)

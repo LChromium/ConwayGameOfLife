@@ -24,7 +24,11 @@ namespace ConwayGameOfLife
         /// <para><b>How to compute the panel width.</b> With <c>ScaleWithScreenSize</c> and
         /// MatchWidthOrHeight at 0.5, the fit scale is <c>(W/1600 + H/900) / 2</c>, so with aspect
         /// ratio <c>a = W/H</c>:
-        /// <code>panelW = W / scale = 2880a / (1.8a + 1)</code>
+        /// <code>panelW = W / scale = 2880a / (0.9a + 1.6)</code>
+        /// (The denominator was written as <c>1.8a + 1</c> here for several rounds. The example
+        /// figures below were computed with the correct form, and <c>PanelScreenFit</c> --
+        /// which the layout probe cross-checks against a running Player -- has always used it;
+        /// only this line was wrong.)
         /// This depends <b>only on the aspect ratio, not on the window's absolute size</b>
         /// (400x400 and 4000x4000 both give 1152; 600x1000 gives 807.5), and it is
         /// <b>unbounded below</b> - a narrow enough window drives it toward zero. Earlier comments
@@ -85,11 +89,14 @@ namespace ConwayGameOfLife
         private Button seedingApplyButton;
         private Button seedingCancelButton;
 
-        // Seeding edits are debounced, then generated off the main thread.
+        // Seeding edits are debounced, then generated off the main thread. The debounce
+        // only decides when the replacement computation is ASKED for; invalidating what is
+        // already running happens immediately, inside SetParameters.
         private const float SeedingDebounceSeconds = 0.2f;
         private bool seedingDirty;
         private float seedingDirtySince;
         private bool seedingWasGenerating;
+        private string seedingFailureLogged;
 
         // Command-line "-lifeSeedApply" waits for the background generation to land.
         private bool seedingApplyWhenReady;
@@ -307,9 +314,11 @@ namespace ConwayGameOfLife
         /// Confirms the candidate: it becomes the experiment's initial state, the
         /// generation counter goes back to zero, and the clock stays paused.
         ///
-        /// If a generation is still running this waits for it rather than applying a
-        /// stale board -- the candidate on screen and the candidate applied must be
-        /// the same one.
+        /// If the preview is still waiting for a candidate that matches the controls --
+        /// because a generation is running, or because a slider moved and the replacement
+        /// is still inside the debounce window -- this waits for it rather than applying a
+        /// stale board. The intent is remembered and spent only on an adopted candidate,
+        /// so a result that gets dropped cannot consume it.
         /// </summary>
         public void ApplySeeding()
         {
@@ -420,6 +429,12 @@ namespace ConwayGameOfLife
 
         private void OnDestroy()
         {
+            // The session owns a background task. Disposing it does NOT wait for that
+            // task -- this runs on the main thread during teardown, and blocking here to
+            // collect a result nobody will use would turn a clean exit into a stall. It
+            // only marks the session, so the late result is refused when it arrives.
+            Seeding?.Dispose();
+
             // Buffers are released on exit; nothing is left allocated.
             backend = null;
             gpuBackend?.Dispose();
@@ -574,11 +589,33 @@ namespace ConwayGameOfLife
             if (Seeding == null || seedingModeField == null)
                 return;
 
-            if (seedingDirty && !Seeding.IsGenerating &&
-                Time.unscaledTime - seedingDirtySince >= SeedingDebounceSeconds)
+            if (previewMode)
             {
+                if (seedingDirty && Time.unscaledTime - seedingDirtySince >= SeedingDebounceSeconds)
+                {
+                    // Deliberately NOT gated on "is something still generating". The
+                    // request has to be issued when the debounce says so: an older task
+                    // may well still be running with parameters that were already
+                    // invalidated, and skipping the request because of it would leave a
+                    // stale candidate on screen with nothing on the way.
+                    seedingDirty = false;
+                    Seeding.RequestCandidate();
+                }
+                else if (!seedingDirty && !Seeding.HasPendingRequest && !Seeding.IsWorking &&
+                         Seeding.IsGenerating)
+                {
+                    // Self-heal. A panel waiting for a candidate nobody is computing would
+                    // lock the clock, single-step and painting for good; asking again costs
+                    // one comparison per frame and cannot happen on a healthy path.
+                    Seeding.RequestCandidate();
+                }
+            }
+            else
+            {
+                // Outside a preview there is no candidate to keep up to date. Clearing this
+                // is what makes "adjusting parameters never generates anything" hold even
+                // after a preview was cancelled mid-drag.
                 seedingDirty = false;
-                Seeding.RequestCandidate();
             }
 
             bool adopted = Seeding.PumpGeneration();
@@ -601,7 +638,16 @@ namespace ConwayGameOfLife
                 }
             }
 
-            if (adopted || Seeding.IsGenerating != seedingWasGenerating)
+            string failure = Seeding.FailureMessage;
+            bool failureChanged = !string.Equals(failure, seedingFailureLogged);
+            if (failureChanged)
+            {
+                seedingFailureLogged = failure;
+                if (failure != null)
+                    Debug.LogWarning($"[Life] seeding generation failed: {failure}");
+            }
+
+            if (adopted || failureChanged || Seeding.IsGenerating != seedingWasGenerating)
             {
                 seedingWasGenerating = Seeding.IsGenerating;
                 UpdateSeedingReadout();
@@ -731,6 +777,12 @@ namespace ConwayGameOfLife
             };
             seedingScroll.name = "tool-page-seeding";
             seedingScroll.AddToClassList("tool-page");
+
+            // The controls are added to the scroll view's CONTENT CONTAINER, so the stacked
+            // layout has to style that element. Styling the scroll view instead left the
+            // container untouched: it then sized itself to its widest child (about 220 units)
+            // and the seeding panel sat in a narrow column with the rest of the row empty.
+            seedingScroll.contentContainer.AddToClassList("seed-page");
             BuildSeedingPanel(seedingScroll);
             library.Add(seedingScroll);
             seedingPage = seedingScroll;
@@ -926,9 +978,15 @@ namespace ConwayGameOfLife
             clusterSlider.value);
 
         /// <summary>
-        /// Stores the edited parameters and marks the candidate out of date. The actual
-        /// generation is debounced and runs on a background thread: one slider drag
-        /// fires many events, and at 1024x1024 each generation is roughly half a second.
+        /// Stores the edited parameters. Outside a preview that is ALL it does: there is no
+        /// candidate to keep up to date, so no generation is requested and the board is left
+        /// exactly as it was, running or paused. Only while a preview is open does an edit
+        /// schedule a replacement, debounced and generated off the main thread.
+        ///
+        /// <para><see cref="LifeSeedingSession.SetParameters"/> invalidates anything already
+        /// in flight in the same call. So a request that was running when the slider moved
+        /// cannot land on screen a moment later: the debounce decides when the replacement
+        /// computation starts, not whether the old one still counts.</para>
         /// </summary>
         private void OnSeedingEdited()
         {
@@ -937,8 +995,11 @@ namespace ConwayGameOfLife
 
             Seeding.SetParameters(CurrentSeedingParameters());
 
-            seedingDirty = true;
-            seedingDirtySince = Time.unscaledTime;
+            if (previewMode)
+            {
+                seedingDirty = true;
+                seedingDirtySince = Time.unscaledTime;
+            }
 
             UpdateSeedingReadout();
             UpdateSeedingActions();
@@ -962,7 +1023,17 @@ namespace ConwayGameOfLife
 
             // Kept short on purpose: the column is 236 units wide and a longer
             // sentence is clipped rather than wrapped.
-            if (Seeding.IsGenerating)
+            if (Seeding.FailureMessage != null)
+            {
+                seedingDensityLabel.text = "生成失败";
+            }
+            else if (seedingDirty)
+            {
+                // Still inside the debounce window: nothing has been asked for yet, so
+                // "生成中" would be a claim about work that has not started.
+                seedingDensityLabel.text = "预览待更新";
+            }
+            else if (Seeding.IsGenerating)
             {
                 seedingDensityLabel.text = "生成中…";
             }
@@ -977,7 +1048,8 @@ namespace ConwayGameOfLife
             }
             else
             {
-                seedingDensityLabel.text = "实际 —（尚未生成候选）";
+                // No preview is open, so there is nothing to report but the way in.
+                seedingDensityLabel.text = previewMode ? "实际 —（尚未生成候选）" : "实际 —（点「预览」生成）";
             }
 
             seedingDensityLabel.tooltip =
@@ -986,10 +1058,17 @@ namespace ConwayGameOfLife
         }
 
         /// <summary>
-        /// Single place that decides what may be pressed. While a candidate is on
-        /// screen the clock, single-stepping and painting are all unavailable: they
-        /// would change the real board underneath a picture that no longer describes it.
-        /// Panning and zooming stay available because they only move the view.
+        /// Single place that decides what may be pressed. While a candidate is on screen the
+        /// clock, single-stepping and painting are all unavailable: they would change the real
+        /// board underneath a picture that no longer describes it. Panning and zooming stay
+        /// available because they only move the view.
+        ///
+        /// <para>All three inputs are false outside a preview -- a candidate only exists
+        /// while one is open, and <see cref="LifeSeedingSession.IsGenerating"/> is false
+        /// unless a candidate is wanted -- so merely editing parameters with the seeding
+        /// page open can never disable the clock. A background task that is still winding
+        /// down after a cancel is not part of this decision either:
+        /// <see cref="LifeSeedingSession.IsWorking"/> is deliberately not consulted here.</para>
         /// </summary>
         private void UpdateSeedingActions()
         {
