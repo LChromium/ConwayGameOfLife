@@ -308,6 +308,108 @@ namespace ConwayGameOfLife.Tests
         }
 
         [UnityTest]
+        public IEnumerator Reset_RestoresTheSameInitialState_AndNeverReseeds()
+        {
+            // The stage-A brief is explicit: "reset" restores the board this
+            // experiment started from. It must NOT roll a new random board, and a
+            // second reset must reproduce the same one.
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+
+            // Pinned to CPU so the population readout is answerable; the reset
+            // contract itself lives in the controller and is backend-independent.
+            SelectBackend(root, gpu: false);
+            yield return null;
+
+            Press(FindButton(root, "随机播种"));
+            yield return null;
+
+            ILifeBackend live = ReadBackend(controller);
+            uint[] startingBoard = ReadCells(live);
+            int startingPopulation = PopulationOf(live);
+            Assert.Greater(startingPopulation, 0,
+                "the random board came out empty, which would make this test vacuous");
+
+            for (int i = 0; i < 3; i++)
+                Press(FindButton(root, "▸ 单步"));
+            yield return null;
+            Assert.AreEqual("0003", ReadoutValue(root, "GENERATION").text,
+                "three steps should advance three generations");
+
+            Press(FindButton(root, "↺ 重置"));
+            yield return null;
+
+            Assert.AreEqual("0000", ReadoutValue(root, "GENERATION").text,
+                "reset must return to generation 0");
+            Assert.AreEqual(startingPopulation, PopulationOf(live),
+                "reset must restore the starting population");
+            CollectionAssert.AreEqual(startingBoard, ReadCells(live),
+                "reset must restore the exact starting board");
+
+            // Run forward again and reset a second time: a reseeding reset would
+            // produce a different board here.
+            for (int i = 0; i < 2; i++)
+                Press(FindButton(root, "▸ 单步"));
+            yield return null;
+            Press(FindButton(root, "↺ 重置"));
+            yield return null;
+
+            CollectionAssert.AreEqual(startingBoard, ReadCells(live),
+                "a second reset must reproduce the same board, not reseed");
+            Assert.AreEqual(startingPopulation, PopulationOf(live),
+                "a second reset must reproduce the same population");
+        }
+
+        [UnityTest]
+        public IEnumerator SwitchingBackend_PausesAndRestartsFromTheSameInitialState()
+        {
+            yield return Settle();
+
+            VisualElement root = GetRoot();
+            DropdownField field = root.Q<DropdownField>("backend-field");
+            Assert.IsNotNull(field, "missing the backend selector");
+            if (!field.enabledSelf)
+            {
+                Assert.Ignore("compute shaders unavailable on this machine; the switch was not exercised");
+            }
+
+            LifeTerminalController controller = UnityEngine.Object.FindAnyObjectByType<LifeTerminalController>();
+
+            SelectBackend(root, gpu: true);
+            yield return null;
+
+            Press(FindPreset(root, "PENTADECATHLON"));
+            yield return null;
+
+            ILifeBackend gpuBackend = ReadBackend(controller);
+            Assert.AreEqual("GPU", gpuBackend.Name, "the selector did not switch the backend to GPU");
+            uint[] startingBoard = ReadCells(gpuBackend);
+
+            for (int i = 0; i < 3; i++)
+                Press(FindButton(root, "▸ 单步"));
+            yield return null;
+            Assert.AreEqual(3, gpuBackend.Generation, "the GPU backend should have advanced three generations");
+
+            SelectBackend(root, gpu: false);
+            yield return null;
+
+            ILifeBackend cpuBackend = ReadBackend(controller);
+            Assert.AreEqual("CPU", cpuBackend.Name, "the selector did not switch the backend to CPU");
+            Assert.AreEqual(0, cpuBackend.Generation,
+                "switching backends must restart from the initial state, not continue mid-run");
+            CollectionAssert.AreEqual(startingBoard, ReadCells(cpuBackend),
+                "the second backend must start from the same board the first one started from");
+            Assert.AreEqual("已暂停", ReadoutValue(root, "STATE").text,
+                "switching backends must leave the clock paused");
+
+            // Leave the interface on GPU for whatever runs next.
+            SelectBackend(root, gpu: true);
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator GpuBackend_ReportsUnavailableStatisticsInsteadOfGuessing()
         {
             // Stage A implements no GPU statistics. The population readout has to

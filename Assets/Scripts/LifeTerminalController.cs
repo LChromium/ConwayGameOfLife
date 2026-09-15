@@ -141,6 +141,10 @@ namespace ConwayGameOfLife
             // that has actually evolved on the GPU rather than generation 0.
             if (HasFlag("-lifeRun"))
                 ToggleRunning();
+
+            // "-lifePerf" runs the stage-A measurement pass and quits.
+            if (HasFlag("-lifePerf"))
+                gameObject.AddComponent<LifePerfProbe>();
         }
 
         private static bool HasFlag(string flag)

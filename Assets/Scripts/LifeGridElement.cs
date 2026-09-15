@@ -71,6 +71,9 @@ namespace ConwayGameOfLife
         public int CellPixels => cellPixels;
         public float PanelScale => panelScale;
 
+        /// <summary>The backend this board is bound to. Used by the performance probe.</summary>
+        public ILifeBackend Backend => backend;
+
         public LifeGridElement()
         {
             focusable = true;
